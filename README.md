@@ -73,7 +73,14 @@ GitHub 저장소에 다음 시크릿을 설정합니다:
         "ecs:DescribeClusters",
         "ecs:CreateCluster",
         "ecs:ListClusters",
-        "ecs:DeleteCluster"
+        "ecs:DeleteCluster",
+        "ecs:CreateService",
+        "ecs:DeleteService",
+        "ecs:ListTasks",
+        "ecs:DescribeTasks",
+        "ecs:RunTask",
+        "ecs:StopTask",
+        "ecs:UpdateService"
       ],
       "Resource": "*"
     },
@@ -124,7 +131,12 @@ GitHub 저장소에 다음 시크릿을 설정합니다:
         "ec2:CreateLaunchTemplate",
         "ec2:DeleteLaunchTemplate",
         "ec2:DescribeLaunchTemplates",
-        "ec2:DescribeLaunchTemplateVersions"
+        "ec2:DescribeLaunchTemplateVersions",
+        "ec2:DescribeNetworkInterfaces",
+        "ec2:CreateNetworkInterface",
+        "ec2:DeleteNetworkInterface",
+        "ec2:DescribeNetworkInterfaceAttribute",
+        "ec2:ModifyNetworkInterfaceAttribute"
       ],
       "Resource": "*"
     },
@@ -151,7 +163,8 @@ GitHub 저장소에 다음 시크릿을 설정합니다:
         "logs:CreateLogStream",
         "logs:DeleteLogStream",
         "logs:DescribeLogStreams",
-        "logs:PutLogEvents"
+        "logs:PutLogEvents",
+        "logs:GetLogEvents"
       ],
       "Resource": "*"
     },
@@ -238,12 +251,12 @@ GitHub 저장소에 다음 시크릿을 설정합니다:
 이 정책은 다음과 같은 AWS 서비스에 대한 권한을 포함합니다:
 
 - **ECR**: 도커 이미지 저장소 관리
-- **ECS**: 컨테이너 서비스 관리
+- **ECS**: 컨테이너 서비스 및 태스크 관리
 - **IAM**: 역할 및 정책 관리
 - **CloudFormation**: 인프라 스택 관리
-- **EC2**: 인스턴스 및 네트워크 리소스 관리
+- **EC2**: 인스턴스, 네트워크 인터페이스 및 보안 그룹 관리
 - **EFS**: 파일 시스템 관리
-- **CloudWatch Logs**: 로그 관리
+- **CloudWatch Logs**: 로그 그룹 및 스트림 관리
 - **Auto Scaling**: 자동 확장 그룹 관리
 - **Application Auto Scaling**: 애플리케이션 자동 확장 관리
 - **SSM**: 시스템 관리자 파라미터 접근
