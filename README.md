@@ -143,7 +143,8 @@ GitHub 저장소에 다음 시크릿을 설정합니다:
         "ec2:CreateNetworkInterface",
         "ec2:DeleteNetworkInterface",
         "ec2:DescribeNetworkInterfaceAttribute",
-        "ec2:ModifyNetworkInterfaceAttribute"
+        "ec2:ModifyNetworkInterfaceAttribute",
+        "ec2:DescribeAccountAttributes"
       ],
       "Resource": "*"
     },
@@ -291,6 +292,10 @@ NLB를 생성하고 관리하기 위해서는 다음과 같은 IAM 권한이 필
    - elasticloadbalancing:RegisterTargets
    - elasticloadbalancing:SetSubnets
    - elasticloadbalancing:ModifyTargetGroupAttributes
+   - elasticloadbalancing:SetSecurityGroups
+   - elasticloadbalancing:AddTags
+   - elasticloadbalancing:RemoveTags
+   - elasticloadbalancing:ModifyListenerAttributes
 
 2. **EC2 권한**:
    - ec2:DescribeSubnets
@@ -299,6 +304,7 @@ NLB를 생성하고 관리하기 위해서는 다음과 같은 IAM 권한이 필
    - ec2:CreateSecurityGroup
    - ec2:AuthorizeSecurityGroupIngress
    - ec2:DescribeNetworkInterfaces
+   - ec2:DescribeAccountAttributes (계정 속성 확인용)
 
 3. **IAM 권한**:
    - iam:CreateServiceLinkedRole (Elastic Load Balancing 서비스 연결 역할 생성용)
@@ -399,8 +405,13 @@ NLB를 처음 생성할 때 AWS는 자동으로 `AWSServiceRoleForElasticLoadBal
 An error occurred (AccessDenied) when calling the CreateLoadBalancer operation: User: arn:aws:iam::***:user/*** is not authorized to perform: iam:CreateServiceLinkedRole
 ```
 
-이 오류가 발생하면 다음 두 가지 방법 중 하나로 해결할 수 있습니다:
-1. IAM 사용자에게 `iam:CreateServiceLinkedRole` 권한을 추가합니다.
+또한 NLB 생성 시 AWS 계정의 속성을 확인하기 위해 `ec2:DescribeAccountAttributes` 권한도 필요합니다. 이 권한이 없으면 다음과 같은 오류가 발생할 수 있습니다:
+```
+An error occurred (AccessDenied) when calling the CreateLoadBalancer operation: User: arn:aws:iam::***:user/*** is not authorized to perform: ec2:DescribeAccountAttributes
+```
+
+이러한 오류가 발생하면 다음과 같이 해결할 수 있습니다:
+1. IAM 사용자에게 필요한 권한(`iam:CreateServiceLinkedRole`, `ec2:DescribeAccountAttributes`)을 추가합니다.
 2. AWS 콘솔에서 관리자 권한이 있는 사용자로 로그인하여 NLB를 한 번 생성합니다. 그러면 서비스 연결 역할이 자동으로 생성되며, 이후에는 이 권한이 없어도 NLB를 생성할 수 있습니다.
 
 ### 2. Cloudflare에서 CNAME 레코드 추가
@@ -445,6 +456,35 @@ An error occurred (AccessDenied) when calling the CreateLoadBalancer operation: 
 | 프로토콜 | TCP/UDP/TLS | HTTP/HTTPS/WebSocket |
 | 고급 기능 | 정적 IP, 고성능 | API 키, 스로틀링, 캐싱 |
 | 적합한 사용 사례 | 고성능 웹 서비스, 게임 서버 | API 관리, 마이크로서비스 |
+
+### NLB 배포 시 발생할 수 있는 오류와 해결 방법
+
+NLB 배포 과정에서 다음과 같은 일반적인 오류가 발생할 수 있습니다:
+
+1. **권한 관련 오류**:
+   - `iam:CreateServiceLinkedRole` 권한 부족: 서비스 연결 역할을 생성할 권한이 없음
+   - `ec2:DescribeAccountAttributes` 권한 부족: AWS 계정 속성을 확인할 권한이 없음
+   - 해결 방법: IAM 사용자에게 필요한 권한을 추가하거나, 관리자 권한으로 NLB를 한 번 생성
+
+2. **서브넷 관련 오류**:
+   - `InvalidSubnet`: 지정된 서브넷이 유효하지 않음
+   - `SubnetNotFound`: 지정된 서브넷을 찾을 수 없음
+   - 해결 방법: 유효한 서브넷 ID를 사용하고, 서브넷이 퍼블릭인지 확인
+
+3. **보안 그룹 관련 오류**:
+   - `InvalidSecurityGroup`: 지정된 보안 그룹이 유효하지 않음
+   - 해결 방법: 유효한 보안 그룹 ID를 사용하고, 보안 그룹이 필요한 포트를 허용하는지 확인
+
+4. **리소스 제한 오류**:
+   - `LimitExceeded`: 계정의 NLB 또는 대상 그룹 수 제한 초과
+   - 해결 방법: 불필요한 리소스를 삭제하거나 AWS 지원에 제한 증가 요청
+
+5. **네트워크 관련 오류**:
+   - `UnsupportedAddressType`: 지원되지 않는 주소 유형
+   - `InvalidConfigurationRequest`: 잘못된 구성 요청
+   - 해결 방법: NLB 구성을 확인하고 지원되는 설정 사용
+
+이러한 오류가 발생하면 GitHub Actions 워크플로우 로그를 확인하여 정확한 오류 메시지를 파악하고, 위의 해결 방법을 참고하여 문제를 해결하세요.
 
 ## 자동 스케일링
 
