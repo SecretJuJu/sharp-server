@@ -166,9 +166,6 @@ jobs:
             aws ecs create-cluster --cluster-name ${ECS_CLUSTER}
           fi
           
-          # 서비스가 존재하는지 확인
-          SERVICE_EXISTS=$(aws ecs describe-services --cluster ${ECS_CLUSTER} --services ${ECS_SERVICE} --query 'services[0].serviceName' --output text 2>/dev/null || echo "")
-          
           # 기본 VPC와 서브넷 가져오기
           VPC_ID=$(aws ec2 describe-vpcs --filters "Name=isDefault,Values=true" --query 'Vpcs[0].VpcId' --output text)
           SUBNET_IDS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=${VPC_ID}" --query 'Subnets[?MapPublicIpOnLaunch==`true`].SubnetId' --output text | tr '\t' ',')
@@ -190,15 +187,37 @@ jobs:
           
           echo "Using Security Group: ${SG_ID}"
           
-          # 기존 서비스가 있으면 삭제
-          if [ ! -z "$SERVICE_EXISTS" ] && [ "$SERVICE_EXISTS" != "None" ]; then
+          # 서비스 상태 확인 및 처리
+          SERVICE_STATUS=$(aws ecs describe-services --cluster ${ECS_CLUSTER} --services ${ECS_SERVICE} --query 'services[0].status' --output text 2>/dev/null || echo "INACTIVE")
+          
+          echo "Current service status: ${SERVICE_STATUS}"
+          
+          # 서비스가 존재하고 ACTIVE 상태인 경우에만 업데이트 또는 삭제 시도
+          if [ "$SERVICE_STATUS" == "ACTIVE" ]; then
+            echo "Stopping existing ECS service..."
+            aws ecs update-service --cluster ${ECS_CLUSTER} --service ${ECS_SERVICE} --desired-count 0 || true
+            
+            echo "Waiting for tasks to stop..."
+            sleep 10
+            
             echo "Deleting existing ECS service..."
-            aws ecs update-service --cluster ${ECS_CLUSTER} --service ${ECS_SERVICE} --desired-count 0
-            aws ecs delete-service --cluster ${ECS_CLUSTER} --service ${ECS_SERVICE} --force
+            aws ecs delete-service --cluster ${ECS_CLUSTER} --service ${ECS_SERVICE} --force || true
             
             # 서비스가 삭제될 때까지 대기
             echo "Waiting for service to be deleted..."
             sleep 30
+          elif [ "$SERVICE_STATUS" != "INACTIVE" ] && [ "$SERVICE_STATUS" != "None" ]; then
+            echo "Service is in ${SERVICE_STATUS} state. Waiting for it to complete..."
+            sleep 60
+          fi
+          
+          # 서비스가 존재하는지 다시 확인
+          SERVICE_EXISTS=$(aws ecs describe-services --cluster ${ECS_CLUSTER} --services ${ECS_SERVICE} --query 'services[0].status' --output text 2>/dev/null || echo "INACTIVE")
+          
+          if [ "$SERVICE_EXISTS" != "INACTIVE" ] && [ "$SERVICE_EXISTS" != "None" ]; then
+            echo "Service still exists in ${SERVICE_EXISTS} state. Trying to force delete..."
+            aws ecs delete-service --cluster ${ECS_CLUSTER} --service ${ECS_SERVICE} --force || true
+            sleep 60
           fi
           
           # 새 서비스 생성
@@ -214,7 +233,7 @@ jobs:
           
           # 서비스 안정화 대기
           echo "Waiting for service to stabilize..."
-          aws ecs wait services-stable --cluster ${ECS_CLUSTER} --services ${ECS_SERVICE}
+          aws ecs wait services-stable --cluster ${ECS_CLUSTER} --services ${ECS_SERVICE} || true
 
       - name: Get service details
         if: success()
