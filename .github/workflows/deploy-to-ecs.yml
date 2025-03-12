@@ -96,6 +96,8 @@ jobs:
             "elasticloadbalancing:DescribeTargetGroups"
             "elasticloadbalancing:DescribeListeners"
             "elasticloadbalancing:RegisterTargets"
+            "elasticloadbalancing:ModifyTargetGroup"
+            "elasticloadbalancing:ModifyTargetGroupAttributes"
             "ec2:DescribeSubnets"
             "ec2:DescribeVpcs"
             "ec2:DescribeSecurityGroups"
@@ -243,6 +245,9 @@ jobs:
             fi
           fi
           
+          # 보안 그룹 ID를 환경 변수로 저장
+          echo "SECURITY_GROUP_ID=${SECURITY_GROUP_ID}" >> $GITHUB_ENV
+          
           # 대상 그룹 생성 또는 업데이트
           TARGET_GROUP_NAME="sharp-server-tg"
           TARGET_GROUP_ARN=$(aws elbv2 describe-target-groups --names ${TARGET_GROUP_NAME} --query "TargetGroups[0].TargetGroupArn" --output text 2>/dev/null || echo "")
@@ -274,7 +279,8 @@ jobs:
             echo "Using existing target group: ${TARGET_GROUP_ARN}"
             
             # 기존 대상 그룹의 헬스 체크 설정 업데이트
-            aws elbv2 modify-target-group \
+            echo "Attempting to update health check settings for target group..."
+            if aws elbv2 modify-target-group \
               --target-group-arn ${TARGET_GROUP_ARN} \
               --health-check-protocol HTTP \
               --health-check-path /health \
@@ -282,10 +288,16 @@ jobs:
               --health-check-interval-seconds 30 \
               --health-check-timeout-seconds 10 \
               --healthy-threshold-count 3 \
-              --unhealthy-threshold-count 3
-            
-            echo "Updated health check settings for target group"
+              --unhealthy-threshold-count 3; then
+              echo "Successfully updated health check settings for target group"
+            else
+              echo "Warning: Failed to update target group settings. This may be due to insufficient permissions."
+              echo "Continuing with deployment using existing target group settings."
+            fi
           fi
+          
+          # 대상 그룹 ARN을 환경 변수로 저장
+          echo "TARGET_GROUP_ARN=${TARGET_GROUP_ARN}" >> $GITHUB_ENV
           
           # NLB 생성 또는 업데이트
           LOAD_BALANCER_NAME="sharp-server-nlb"
@@ -302,6 +314,9 @@ jobs:
           else
             echo "Using existing Network Load Balancer: ${LOAD_BALANCER_ARN}"
           fi
+          
+          # 로드 밸런서 ARN을 환경 변수로 저장
+          echo "LOAD_BALANCER_ARN=${LOAD_BALANCER_ARN}" >> $GITHUB_ENV
           
           # HTTP 리스너(80 포트) 생성 또는 확인
           HTTP_LISTENER_ARN=$(aws elbv2 describe-listeners --load-balancer-arn ${LOAD_BALANCER_ARN} --query "Listeners[?Port==\`80\`].ListenerArn" --output text 2>/dev/null || echo "")
@@ -386,8 +401,31 @@ jobs:
           # 유효한 서브넷 사용
           echo "Using valid subnets for ECS service: ${SUBNET_IDS}"
           
+          # 대상 그룹 ARN 확인
+          echo "Target Group ARN: ${TARGET_GROUP_ARN}"
+          if [ -z "${TARGET_GROUP_ARN}" ]; then
+            echo "Error: Target Group ARN is empty. Cannot create service without target group."
+            exit 1
+          fi
+          
+          # 컨테이너 이름 확인
+          echo "Container Name: ${CONTAINER_NAME}"
+          if [ -z "${CONTAINER_NAME}" ]; then
+            echo "Error: Container Name is empty."
+            exit 1
+          fi
+          
           # 새 서비스 생성 (로드 밸런서와 연결)
           echo "Creating new ECS service with load balancer..."
+          echo "Debug info:"
+          echo "- Cluster: ${ECS_CLUSTER}"
+          echo "- Service: ${ECS_SERVICE}"
+          echo "- Task Definition: ${TASK_DEF_ARN}"
+          echo "- Target Group ARN: ${TARGET_GROUP_ARN}"
+          echo "- Container Name: ${CONTAINER_NAME}"
+          echo "- Security Group: ${SECURITY_GROUP_ID}"
+          echo "- Subnets: ${SUBNET_IDS}"
+          
           aws ecs create-service \
             --cluster ${ECS_CLUSTER} \
             --service-name ${ECS_SERVICE} \

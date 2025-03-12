@@ -234,6 +234,7 @@ GitHub 저장소에 다음 시크릿을 설정합니다:
         "elasticloadbalancing:AddTags",
         "elasticloadbalancing:RemoveTags",
         "elasticloadbalancing:ModifyTargetGroupAttributes",
+        "elasticloadbalancing:ModifyTargetGroup",
         "elasticloadbalancing:ModifyListenerAttributes"
       ],
       "Resource": "*"
@@ -292,10 +293,13 @@ NLB를 생성하고 관리하기 위해서는 다음과 같은 IAM 권한이 필
    - elasticloadbalancing:RegisterTargets
    - elasticloadbalancing:SetSubnets
    - elasticloadbalancing:ModifyTargetGroupAttributes
+   - elasticloadbalancing:ModifyTargetGroup
    - elasticloadbalancing:SetSecurityGroups
    - elasticloadbalancing:AddTags
    - elasticloadbalancing:RemoveTags
    - elasticloadbalancing:ModifyListenerAttributes
+
+> **중요**: `elasticloadbalancing:ModifyTargetGroup` 권한이 반드시 필요합니다. 이 권한이 없으면 대상 그룹의 헬스 체크 설정을 업데이트할 수 없으며, 배포 과정에서 오류가 발생합니다.
 
 2. **EC2 권한**:
    - ec2:DescribeSubnets
@@ -401,12 +405,12 @@ Cloudflare에 등록된 도메인을 NLB(Network Load Balancer)에 연결하려�
 NLB를 처음 생성할 때 AWS는 자동으로 `AWSServiceRoleForElasticLoadBalancing`이라는 서비스 연결 역할을 생성합니다. 이 역할은 Elastic Load Balancing 서비스가 사용자를 대신하여 다른 AWS 서비스를 호출할 수 있도록 하는 권한을 제공합니다.
 
 이 역할을 생성하려면 IAM 사용자에게 `iam:CreateServiceLinkedRole` 권한이 필요합니다. 이 권한이 없으면 다음과 같은 오류가 발생할 수 있습니다:
-```
+```bash
 An error occurred (AccessDenied) when calling the CreateLoadBalancer operation: User: arn:aws:iam::***:user/*** is not authorized to perform: iam:CreateServiceLinkedRole
 ```
 
 또한 NLB 생성 시 AWS 계정의 속성을 확인하기 위해 `ec2:DescribeAccountAttributes` 권한도 필요합니다. 이 권한이 없으면 다음과 같은 오류가 발생할 수 있습니다:
-```
+```bash
 An error occurred (AccessDenied) when calling the CreateLoadBalancer operation: User: arn:aws:iam::***:user/*** is not authorized to perform: ec2:DescribeAccountAttributes
 ```
 
@@ -441,86 +445,63 @@ An error occurred (AccessDenied) when calling the CreateLoadBalancer operation: 
 ### 5. 연결 확인
 
 1. 브라우저에서 `https://sharp.secretjuju.kr`로 접속하여 서비스가 정상적으로 작동하는지 확인합니다.
-2. 문제가 있는 경우:
-   - Cloudflare의 SSL/TLS 설정을 확인합니다.
-   - DNS 전파가 완료될 때까지 기다립니다 (최대 24시간).
-   - NLB 상태 및 대상 그룹 상태를 AWS 콘솔에서 확인합니다.
-   - ECS 서비스 로그를 CloudWatch에서 확인합니다.
+2. 문제가 있는 경우 Cloudflare의 SSL/TLS 설정과 DNS 설정을 확인합니다.
 
-### NLB와 API Gateway 비교
+### 일반적인 배포 오류 및 해결 방법
 
-| 기능 | NLB | API Gateway |
-|------|-----|-------------|
-| 비용 | 시간당 요금 + 데이터 처리 요금 | 요청 수 기반 요금 |
-| 지연 시간 | 매우 낮음 | 약간 높음 |
-| 프로토콜 | TCP/UDP/TLS | HTTP/HTTPS/WebSocket |
-| 고급 기능 | 정적 IP, 고성능 | API 키, 스로틀링, 캐싱 |
-| 적합한 사용 사례 | 고성능 웹 서비스, 게임 서버 | API 관리, 마이크로서비스 |
+#### 1. Target Group ARN and Load Balancer Name cannot both be blank
 
-### NLB 배포 시 발생할 수 있는 오류와 해결 방법
+이 오류는 ECS 서비스를 생성할 때 대상 그룹 ARN이나 로드 밸런서 정보가 제대로 전달되지 않았을 때 발생합니다.
 
-NLB 배포 과정에서 다음과 같은 일반적인 오류가 발생할 수 있습니다:
+**원인**:
+- 대상 그룹 ARN이 환경 변수에 제대로 저장되지 않았거나 전달되지 않았습니다.
+- 로드 밸런서 설정이 올바르게 구성되지 않았습니다.
 
-1. **권한 관련 오류**:
-   - `iam:CreateServiceLinkedRole` 권한 부족: 서비스 연결 역할을 생성할 권한이 없음
-   - `ec2:DescribeAccountAttributes` 권한 부족: AWS 계정 속성을 확인할 권한이 없음
-   - 해결 방법: IAM 사용자에게 필요한 권한을 추가하거나, 관리자 권한으로 NLB를 한 번 생성
+**해결 방법**:
+1. GitHub Actions 워크플로우 파일에서 대상 그룹 ARN을 환경 변수로 저장하는 부분을 확인합니다:
+   ```bash
+   echo "TARGET_GROUP_ARN=${TARGET_GROUP_ARN}" >> $GITHUB_ENV
+   ```
+2. ECS 서비스 생성 전에 대상 그룹 ARN이 비어있는지 확인하는 로직을 추가합니다:
+   ```bash
+   if [ -z "${TARGET_GROUP_ARN}" ]; then
+     echo "Error: Target Group ARN is empty. Cannot create service without target group."
+     exit 1
+   fi
+   ```
+3. 로드 밸런서 설정이 올바른지 확인합니다:
+   ```bash
+   --load-balancers "targetGroupArn=${TARGET_GROUP_ARN},containerName=${CONTAINER_NAME},containerPort=3000"
+   ```
 
-2. **서브넷 관련 오류**:
-   - `InvalidSubnet`: 지정된 서브넷이 유효하지 않음
-   - `SubnetNotFound`: 지정된 서브넷을 찾을 수 없음
-   - 해결 방법: 유효한 서브넷 ID를 사용하고, 서브넷이 퍼블릭인지 확인
+#### 2. elasticloadbalancing:ModifyTargetGroup 권한 오류
 
-3. **보안 그룹 관련 오류**:
-   - `InvalidSecurityGroup`: 지정된 보안 그룹이 유효하지 않음
-   - 해결 방법: 유효한 보안 그룹 ID를 사용하고, 보안 그룹이 필요한 포트를 허용하는지 확인
+이 오류는 대상 그룹의 헬스 체크 설정을 업데이트할 때 필요한 권한이 없을 때 발생합니다.
 
-4. **리소스 제한 오류**:
-   - `LimitExceeded`: 계정의 NLB 또는 대상 그룹 수 제한 초과
-   - 해결 방법: 불필요한 리소스를 삭제하거나 AWS 지원에 제한 증가 요청
-
-5. **네트워크 관련 오류**:
-   - `UnsupportedAddressType`: 지원되지 않는 주소 유형
-   - `InvalidConfigurationRequest`: 잘못된 구성 요청
-   - 해결 방법: NLB 구성을 확인하고 지원되는 설정 사용
-
-이러한 오류가 발생하면 GitHub Actions 워크플로우 로그를 확인하여 정확한 오류 메시지를 파악하고, 위의 해결 방법을 참고하여 문제를 해결하세요.
-
-## 자동 스케일링
-
-이 서비스는 다음과 같은 자동 스케일링 기능을 제공합니다:
-
-- **스케일 아웃**: CPU 사용률이 70%를 초과하면 자동으로 인스턴스가 추가됩니다.
-- **스케일 인**: 사용량이 적을 때 자동으로 인스턴스가 종료됩니다.
-- **최소 인스턴스 수**: 0 (사용하지 않을 때는 비용이 발생하지 않음)
-- **최대 인스턴스 수**: 4 (필요에 따라 조정 가능)
-
-## 로컬 개발
-
-### 로컬에서 실행하기
-
+**오류 메시지**:
 ```bash
-# pnpm 설치 (처음 한 번만)
-corepack enable
-corepack prepare pnpm@latest --activate
-
-# 의존성 설치
-pnpm install
-
-# 개발 서버 실행
-pnpm run dev
+An error occurred (AccessDenied) when calling the ModifyTargetGroup operation: User: arn:aws:iam::***:user/*** is not authorized to perform: elasticloadbalancing:ModifyTargetGroup on resource: arn:aws:elasticloadbalancing:***:targetgroup/***
 ```
 
-### Docker로 실행하기
+**원인**:
+- IAM 사용자에게 `elasticloadbalancing:ModifyTargetGroup` 권한이 없습니다.
 
-```bash
-# Docker 이미지 빌드
-docker build -t sharp-server .
-
-# Docker 컨테이너 실행
-docker run -p 3000:3000 sharp-server
-```
-
-## 라이선스
-
-ISC 
+**해결 방법**:
+1. IAM 사용자에게 `elasticloadbalancing:ModifyTargetGroup` 권한을 추가합니다.
+2. 또는 워크플로우 파일에서 대상 그룹 수정 부분에 조건문을 추가하여 권한이 없을 경우 오류를 무시하고 계속 진행하도록 수정합니다:
+   ```bash
+   if aws elbv2 modify-target-group \
+     --target-group-arn ${TARGET_GROUP_ARN} \
+     --health-check-protocol HTTP \
+     --health-check-path /health \
+     --health-check-port 3000 \
+     --health-check-interval-seconds 30 \
+     --health-check-timeout-seconds 10 \
+     --healthy-threshold-count 3 \
+     --unhealthy-threshold-count 3; then
+     echo "Successfully updated health check settings for target group"
+   else
+     echo "Warning: Failed to update target group settings. This may be due to insufficient permissions."
+     echo "Continuing with deployment using existing target group settings."
+   fi
+   ```
