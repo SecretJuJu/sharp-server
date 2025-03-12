@@ -27,13 +27,13 @@ Parameters:
 
   InstanceType:
     Type: String
-    Default: t4g.small
-    Description: EC2 instance type (ARM64 based)
+    Default: t3.small
+    Description: EC2 instance type (x86_64 based)
     AllowedValues:
-      - t4g.micro
-      - t4g.small
-      - t4g.medium
-      - c6g.large
+      - t3.micro
+      - t3.small
+      - t3.medium
+      - c5.large
 
   CertificateArn:
     Type: String
@@ -156,7 +156,7 @@ Resources:
       LaunchTemplateName: SharpServerSpotLaunchTemplate
       LaunchTemplateData:
         InstanceType: !Ref InstanceType
-        ImageId: '{{resolve:ssm:/aws/service/ecs/optimized-ami/amazon-linux-2/arm64/recommended/image_id}}'
+        ImageId: '{{resolve:ssm:/aws/service/ecs/optimized-ami/amazon-linux-2/recommended/image_id}}'
         SecurityGroupIds:
           - !Ref ECSSecurityGroup
         IamInstanceProfile:

@@ -1,6 +1,6 @@
 # 이미지 변환 서비스
 
-이미지 변환 서비스는 다양한 해상도와 품질로 이미지를 변환할 수 있는 웹 애플리케이션입니다. 이 서비스는 AWS ECS에서 ARM64 기반 스팟 인스턴스를 사용하여 비용 효율적으로 운영됩니다.
+이미지 변환 서비스는 다양한 해상도와 품질로 이미지를 변환할 수 있는 웹 애플리케이션입니다. 이 서비스는 AWS ECS에서 x86_64 기반 스팟 인스턴스를 사용하여 비용 효율적으로 운영됩니다.
 
 ## 주요 기능
 
@@ -15,7 +15,7 @@
 - **백엔드**: Node.js, Express
 - **이미지 처리**: Sharp 라이브러리
 - **컨테이너화**: Docker, PM2
-- **인프라**: AWS ECS, Fargate, EC2 스팟 인스턴스, EFS, CloudFormation, API Gateway
+- **인프라**: AWS ECS, Fargate, EC2 스팟 인스턴스(x86_64), EFS, CloudFormation, API Gateway
 - **CI/CD**: GitHub Actions
 - **패키지 관리**: pnpm
 
