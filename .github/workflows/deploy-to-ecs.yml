@@ -15,6 +15,7 @@ env:
   CONTAINER_NAME: sharp-server
   ECS_EXECUTION_ROLE_ARN: ""
   ECS_TASK_ROLE_ARN: ""
+  LOG_GROUP_NAME: "/ecs/sharp-server"
 
 jobs:
   deploy:
@@ -57,6 +58,11 @@ jobs:
               --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
           fi
           
+          # CloudWatch Logs 정책 추가
+          aws iam attach-role-policy \
+            --role-name ${EXECUTION_ROLE_NAME} \
+            --policy-arn arn:aws:iam::aws:policy/CloudWatchLogsFullAccess
+          
           # ECS 태스크 역할 생성 또는 가져오기
           TASK_ROLE_NAME="ecsTaskRole"
           TASK_ROLE_ARN=$(aws iam get-role --role-name ${TASK_ROLE_NAME} --query 'Role.Arn' --output text 2>/dev/null || echo "")
@@ -92,10 +98,25 @@ jobs:
           CLUSTER_CHECK=$(aws ecs describe-clusters --clusters ${ECS_CLUSTER} --query 'clusters[0].clusterName' --output text)
           echo "Confirmed ECS cluster: ${CLUSTER_CHECK}"
 
-      - name: Create CloudWatch Logs group if not exists
+      - name: Create and verify CloudWatch Logs group
         run: |
-          aws logs describe-log-groups --log-group-name-prefix "/ecs/sharp-server" --query 'logGroups[0].logGroupName' --output text 2>/dev/null || \
-          aws logs create-log-group --log-group-name "/ecs/sharp-server"
+          # 로그 그룹 생성 (이미 존재하면 오류 무시)
+          aws logs create-log-group --log-group-name ${LOG_GROUP_NAME} || true
+          
+          # 로그 그룹이 생성되었는지 확인
+          LOG_GROUP_CHECK=$(aws logs describe-log-groups --log-group-name-prefix ${LOG_GROUP_NAME} --query 'logGroups[0].logGroupName' --output text)
+          
+          if [ "$LOG_GROUP_CHECK" == "None" ] || [ -z "$LOG_GROUP_CHECK" ]; then
+            echo "Error: Failed to create log group ${LOG_GROUP_NAME}"
+            exit 1
+          else
+            echo "Confirmed log group exists: ${LOG_GROUP_CHECK}"
+          fi
+          
+          # 로그 스트림 생성 (선택 사항이지만 권한 테스트를 위해 추가)
+          TEST_STREAM_NAME="github-action-test-$(date +%s)"
+          aws logs create-log-stream --log-group-name ${LOG_GROUP_NAME} --log-stream-name ${TEST_STREAM_NAME}
+          echo "Created test log stream: ${TEST_STREAM_NAME}"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v2
@@ -124,6 +145,7 @@ jobs:
           sed -i "s|\${ECR_REPOSITORY_URI}|${{ steps.login-ecr.outputs.registry }}/${ECR_REPOSITORY}|g" ${ECS_TASK_DEFINITION}
           sed -i "s|\${IMAGE_TAG}|${GITHUB_SHA}|g" ${ECS_TASK_DEFINITION}
           sed -i "s|\${AWS_REGION}|${AWS_REGION}|g" ${ECS_TASK_DEFINITION}
+          sed -i "s|\${LOG_GROUP_NAME}|${LOG_GROUP_NAME}|g" ${ECS_TASK_DEFINITION}
           
           cat ${ECS_TASK_DEFINITION}
 
@@ -168,24 +190,27 @@ jobs:
           
           echo "Using Security Group: ${SG_ID}"
           
-          if [ -z "$SERVICE_EXISTS" ] || [ "$SERVICE_EXISTS" == "None" ]; then
-            echo "Creating new ECS service..."
-            aws ecs create-service \
-              --cluster ${ECS_CLUSTER} \
-              --service-name ${ECS_SERVICE} \
-              --task-definition ${TASK_DEF_ARN} \
-              --desired-count 1 \
-              --launch-type FARGATE \
-              --network-configuration "awsvpcConfiguration={subnets=[${SUBNET_IDS}],securityGroups=[${SG_ID}],assignPublicIp=ENABLED}" \
-              --scheduling-strategy REPLICA
-          else
-            echo "Updating existing ECS service..."
-            aws ecs update-service \
-              --cluster ${ECS_CLUSTER} \
-              --service ${ECS_SERVICE} \
-              --task-definition ${TASK_DEF_ARN} \
-              --force-new-deployment
+          # 기존 서비스가 있으면 삭제
+          if [ ! -z "$SERVICE_EXISTS" ] && [ "$SERVICE_EXISTS" != "None" ]; then
+            echo "Deleting existing ECS service..."
+            aws ecs update-service --cluster ${ECS_CLUSTER} --service ${ECS_SERVICE} --desired-count 0
+            aws ecs delete-service --cluster ${ECS_CLUSTER} --service ${ECS_SERVICE} --force
+            
+            # 서비스가 삭제될 때까지 대기
+            echo "Waiting for service to be deleted..."
+            sleep 30
           fi
+          
+          # 새 서비스 생성
+          echo "Creating new ECS service..."
+          aws ecs create-service \
+            --cluster ${ECS_CLUSTER} \
+            --service-name ${ECS_SERVICE} \
+            --task-definition ${TASK_DEF_ARN} \
+            --desired-count 1 \
+            --launch-type FARGATE \
+            --network-configuration "awsvpcConfiguration={subnets=[${SUBNET_IDS}],securityGroups=[${SG_ID}],assignPublicIp=ENABLED}" \
+            --scheduling-strategy REPLICA
           
           # 서비스 안정화 대기
           echo "Waiting for service to stabilize..."
@@ -198,6 +223,29 @@ jobs:
           TASK_ARN=$(aws ecs list-tasks --cluster ${ECS_CLUSTER} --service-name ${ECS_SERVICE} --query 'taskArns[0]' --output text)
           
           if [ ! -z "$TASK_ARN" ] && [ "$TASK_ARN" != "None" ]; then
+            echo "Task ARN: ${TASK_ARN}"
+            
+            # 태스크 상태 확인
+            TASK_STATUS=$(aws ecs describe-tasks --cluster ${ECS_CLUSTER} --tasks ${TASK_ARN} --query 'tasks[0].lastStatus' --output text)
+            echo "Task Status: ${TASK_STATUS}"
+            
+            # 태스크 실패 이유 확인
+            TASK_STOPPED_REASON=$(aws ecs describe-tasks --cluster ${ECS_CLUSTER} --tasks ${TASK_ARN} --query 'tasks[0].stoppedReason' --output text)
+            if [ ! -z "$TASK_STOPPED_REASON" ] && [ "$TASK_STOPPED_REASON" != "None" ]; then
+              echo "Task Stopped Reason: ${TASK_STOPPED_REASON}"
+            fi
+            
+            # 컨테이너 상태 확인
+            CONTAINER_STATUS=$(aws ecs describe-tasks --cluster ${ECS_CLUSTER} --tasks ${TASK_ARN} --query 'tasks[0].containers[0].lastStatus' --output text)
+            echo "Container Status: ${CONTAINER_STATUS}"
+            
+            # 컨테이너 실패 이유 확인
+            CONTAINER_REASON=$(aws ecs describe-tasks --cluster ${ECS_CLUSTER} --tasks ${TASK_ARN} --query 'tasks[0].containers[0].reason' --output text)
+            if [ ! -z "$CONTAINER_REASON" ] && [ "$CONTAINER_REASON" != "None" ]; then
+              echo "Container Reason: ${CONTAINER_REASON}"
+            fi
+            
+            # 네트워크 인터페이스 확인
             ENI_ID=$(aws ecs describe-tasks --cluster ${ECS_CLUSTER} --tasks ${TASK_ARN} --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' --output text)
             
             if [ ! -z "$ENI_ID" ] && [ "$ENI_ID" != "None" ]; then
