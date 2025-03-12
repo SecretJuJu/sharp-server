@@ -101,6 +101,13 @@ GitHub 저장소에 다음 시크릿을 설정합니다:
     {
       "Effect": "Allow",
       "Action": [
+        "iam:CreateServiceLinkedRole"
+      ],
+      "Resource": "arn:aws:iam::*:role/aws-service-role/elasticloadbalancing.amazonaws.com/AWSServiceRoleForElasticLoadBalancing"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
         "cloudformation:CreateStack",
         "cloudformation:UpdateStack",
         "cloudformation:DeleteStack",
@@ -293,10 +300,14 @@ NLB를 생성하고 관리하기 위해서는 다음과 같은 IAM 권한이 필
    - ec2:AuthorizeSecurityGroupIngress
    - ec2:DescribeNetworkInterfaces
 
+3. **IAM 권한**:
+   - iam:CreateServiceLinkedRole (Elastic Load Balancing 서비스 연결 역할 생성용)
+
 이러한 권한은 다음 관리형 정책을 통해 얻을 수 있습니다:
 - AmazonEC2FullAccess
 - ElasticLoadBalancingFullAccess
 - AmazonECS-FullAccess
+- IAMFullAccess (또는 최소한 iam:CreateServiceLinkedRole 권한이 포함된 정책)
 
 ### 배포 단계
 
@@ -378,6 +389,19 @@ Cloudflare에 등록된 도메인을 NLB(Network Load Balancer)에 연결하려�
 1. GitHub Actions 워크플로우가 성공적으로 완료되면 NLB가 생성됩니다.
 2. 워크플로우 로그에서 NLB DNS 이름을 확인합니다 (예: `sharp-server-nlb-123456789.ap-northeast-2.elb.amazonaws.com`).
 3. 또는 AWS 콘솔에서 EC2 > 로드 밸런서로 이동하여 `sharp-server-nlb`의 DNS 이름을 확인합니다.
+
+### 서비스 연결 역할(Service-Linked Role) 정보
+
+NLB를 처음 생성할 때 AWS는 자동으로 `AWSServiceRoleForElasticLoadBalancing`이라는 서비스 연결 역할을 생성합니다. 이 역할은 Elastic Load Balancing 서비스가 사용자를 대신하여 다른 AWS 서비스를 호출할 수 있도록 하는 권한을 제공합니다.
+
+이 역할을 생성하려면 IAM 사용자에게 `iam:CreateServiceLinkedRole` 권한이 필요합니다. 이 권한이 없으면 다음과 같은 오류가 발생할 수 있습니다:
+```
+An error occurred (AccessDenied) when calling the CreateLoadBalancer operation: User: arn:aws:iam::***:user/*** is not authorized to perform: iam:CreateServiceLinkedRole
+```
+
+이 오류가 발생하면 다음 두 가지 방법 중 하나로 해결할 수 있습니다:
+1. IAM 사용자에게 `iam:CreateServiceLinkedRole` 권한을 추가합니다.
+2. AWS 콘솔에서 관리자 권한이 있는 사용자로 로그인하여 NLB를 한 번 생성합니다. 그러면 서비스 연결 역할이 자동으로 생성되며, 이후에는 이 권한이 없어도 NLB를 생성할 수 있습니다.
 
 ### 2. Cloudflare에서 CNAME 레코드 추가
 
