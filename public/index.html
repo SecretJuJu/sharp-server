@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>이미지 변환 도구</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>이미지 변환 도구</h1>
+      <p>이미지 해상도와 품질을 조정하여 최적화하세요</p>
+      <nav class="main-nav">
+        <a href="index.html" class="active">단일 변환</a>
+        <a href="batch.html">배치 변환</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="upload-section">
+        <div class="drop-area" id="dropArea">
+          <div class="drop-message">
+            <img src="upload-icon.svg" alt="업로드" id="uploadIcon">
+            <p>이미지를 여기에 드래그하거나</p>
+            <button id="selectButton">이미지 선택</button>
+            <input type="file" id="fileInput" accept="image/*" style="display: none;">
+          </div>
+          <div class="image-preview" id="imagePreview" style="display: none;">
+            <img id="previewImage" src="" alt="이미지 미리보기">
+            <div class="image-info">
+              <div class="info-item">
+                <span class="info-label">원본 크기:</span>
+                <span id="filesize"></span>
+                (<span id="filesize-kb"></span> KB / <span id="filesize-mb"></span> MB)
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="controls-section">
+        <div class="control-group">
+          <label for="widthInput">너비 (픽셀)</label>
+          <input type="number" id="widthInput" min="1" value="800">
+        </div>
+        
+        <div class="control-group">
+          <label for="heightInput">높이 (픽셀)</label>
+          <input type="number" id="heightInput" min="1" value="600">
+        </div>
+        
+        <div class="control-group">
+          <label for="keepRatio">비율 유지</label>
+          <input type="checkbox" id="keepRatio" checked>
+        </div>
+        
+        <div class="control-group">
+          <label for="qualityInput">품질 (1-100)</label>
+          <!-- <input type="range" id="qualityInput" min="1" max="100" value="85">
+          <span id="qualityValue">85</span> -->
+          <input type="number" id="qualityInput" min="1" max="100" value="85">
+        </div>
+        
+        <div class="control-group">
+          <label for="formatSelect">이미지 형식</label>
+          <select id="formatSelect" class="format-select">
+            <option value="jpeg">JPEG</option>
+            <option value="png">PNG</option>
+            <option value="webp">WebP</option>
+            <option value="avif">AVIF</option>
+            <option value="tiff">TIFF</option>
+          </select>
+        </div>
+        
+        <div id="jpegOptions" class="jpeg-options" style="display: none;">
+          <h3 class="options-title">JPEG 고급 옵션</h3>
+          
+          <div class="jpeg-options-group">
+            <div class="control-group checkbox-group">
+              <div>
+                <label for="progressive">프로그레시브 모드</label>
+                <span class="tooltip" title="점진적으로 로딩되는 JPEG 이미지를 생성합니다.">?</span>
+              </div>
+              <input type="checkbox" id="progressive" checked>
+            </div>
+            
+            <div class="control-group checkbox-group">
+              <div>
+                <label for="optimizeScans">스캔 최적화</label>
+                <span class="tooltip" title="여러 스캔을 통해 이미지 품질을 최적화합니다.">?</span>
+              </div>
+              <input type="checkbox" id="optimizeScans" checked>
+            </div>
+            
+            <div class="control-group checkbox-group">
+              <div>
+                <label for="trellisQuantisation">트렐리스 양자화</label>
+                <span class="tooltip" title="더 나은 압축을 위한 고급 양자화 기법을 사용합니다.">?</span>
+              </div>
+              <input type="checkbox" id="trellisQuantisation" checked>
+            </div>
+            
+            <div class="control-group checkbox-group">
+              <div>
+                <label for="overshootDeringing">오버슈트 디링잉</label>
+                <span class="tooltip" title="이미지 가장자리의 링잉 아티팩트를 줄입니다.">?</span>
+              </div>
+              <input type="checkbox" id="overshootDeringing" checked>
+            </div>
+            
+            <div class="control-group checkbox-group">
+              <div>
+                <label for="optimizeCoding">코딩 최적화</label>
+                <span class="tooltip" title="최적의 허프만 코딩 테이블을 사용합니다.">?</span>
+              </div>
+              <input type="checkbox" id="optimizeCoding" checked>
+            </div>
+            
+            <div class="control-group checkbox-group">
+              <div>
+                <label for="mozjpeg">MozJPEG 사용</label>
+                <span class="tooltip" title="Mozilla의 향상된 JPEG 인코더를 사용합니다.">?</span>
+              </div>
+              <input type="checkbox" id="mozjpeg" checked>
+            </div>
+          </div>
+        </div>
+        
+        <div class="buttons-group">
+          <button id="previewButton" disabled>프리뷰 생성</button>
+          <button id="downloadButton" disabled>변환하여 다운로드</button>
+        </div>
+      </section>
+
+      <section class="result-section" id="resultSection" style="display: none;">
+        <h2>변환 결과</h2>
+        <div class="comparison">
+          <div class="original">
+            <h3>원본 이미지</h3>
+            <img id="originalImage" src="" alt="원본 이미지">
+            <div class="image-info">
+              <div class="info-item">
+                <span class="info-label">크기:</span>
+                <span id="original-filesize"></span>
+                (<span id="original-filesize-kb"></span> KB / <span id="original-filesize-mb"></span> MB)
+              </div>
+              <div class="info-item">
+                <span class="info-label">해상도:</span>
+                <span id="original-resolution"></span>
+              </div>
+            </div>
+          </div>
+          
+          <div class="converted">
+            <h3>변환된 이미지</h3>
+            <img id="convertedImage" src="" alt="변환된 이미지">
+            <div class="image-info">
+              <div class="info-item">
+                <span class="info-label">예상 크기:</span>
+                <span id="estimated-size"></span>
+                (<span id="estimated-size-kb"></span> KB / <span id="estimated-size-mb"></span> MB)
+              </div>
+              <div class="info-item">
+                <span class="info-label">해상도:</span>
+                <span id="converted-resolution"></span>
+              </div>
+              <div class="info-item reduction-highlight">
+                <span class="info-label">크기 감소:</span>
+                <span id="size-reduction"></span> (<span id="size-reduction-ratio"></span>%)
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <p>&copy; 2025 wonderwall 이미지 변환 도구</p>
+    </footer>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html> 

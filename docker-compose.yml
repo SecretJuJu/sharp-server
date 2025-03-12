@@ -1,0 +1,19 @@
+version: '3'
+
+services:
+  sharp-server:
+    build: .
+    container_name: sharp-server
+    restart: always
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./uploads:/app/uploads
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G

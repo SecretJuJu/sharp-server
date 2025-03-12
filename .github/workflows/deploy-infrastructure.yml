@@ -1,0 +1,147 @@
+name: Deploy AWS Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      vpc_id:
+        description: 'VPC ID'
+        required: true
+      subnet_ids:
+        description: 'Subnet IDs (comma separated)'
+        required: true
+      instance_type:
+        description: 'EC2 Instance Type'
+        required: true
+        default: 't4g.small'
+      min_size:
+        description: 'Min Size of Auto Scaling Group'
+        required: true
+        default: '0'
+      max_size:
+        description: 'Max Size of Auto Scaling Group'
+        required: true
+        default: '2'
+      desired_capacity:
+        description: 'Desired Capacity of Auto Scaling Group'
+        required: true
+        default: '0'
+      certificate_arn:
+        description: 'ACM Certificate ARN for custom domain (optional)'
+        required: false
+        default: ''
+
+env:
+  AWS_REGION: ap-northeast-2
+  STACK_NAME: sharp-server-infrastructure
+
+jobs:
+  deploy:
+    name: Deploy Infrastructure
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Create ECR Repository if not exists
+        run: |
+          aws ecr describe-repositories --repository-names sharp-server || \
+          aws ecr create-repository --repository-name sharp-server \
+            --image-scanning-configuration scanOnPush=true \
+            --encryption-configuration encryptionType=AES256
+
+      - name: Convert subnet IDs to array
+        id: subnets
+        run: |
+          SUBNET_ARRAY=$(echo "${{ github.event.inputs.subnet_ids }}" | sed 's/,/","/g')
+          echo "subnet_array=[\"$SUBNET_ARRAY\"]" >> $GITHUB_OUTPUT
+
+      - name: Deploy CloudFormation Stack
+        run: |
+          aws cloudformation deploy \
+            --stack-name ${{ env.STACK_NAME }} \
+            --template-file cloudformation/ecs-spot-infrastructure.yml \
+            --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+            --parameter-overrides \
+              VpcId=${{ github.event.inputs.vpc_id }} \
+              SubnetIds=${{ steps.subnets.outputs.subnet_array }} \
+              InstanceType=${{ github.event.inputs.instance_type }} \
+              MinSize=${{ github.event.inputs.min_size }} \
+              MaxSize=${{ github.event.inputs.max_size }} \
+              DesiredCapacity=${{ github.event.inputs.desired_capacity }} \
+              CertificateArn=${{ github.event.inputs.certificate_arn }}
+
+      - name: Get CloudFormation Outputs
+        id: cfn-outputs
+        run: |
+          OUTPUTS=$(aws cloudformation describe-stacks --stack-name ${{ env.STACK_NAME }} --query "Stacks[0].Outputs" --output json)
+          echo "outputs=$OUTPUTS" >> $GITHUB_OUTPUT
+          
+          # Extract specific outputs
+          ECS_CLUSTER=$(echo $OUTPUTS | jq -r '.[] | select(.OutputKey=="ECSCluster") | .OutputValue')
+          ECS_SERVICE=$(echo $OUTPUTS | jq -r '.[] | select(.OutputKey=="ECSService") | .OutputValue')
+          EFS_ID=$(echo $OUTPUTS | jq -r '.[] | select(.OutputKey=="EFSFileSystem") | .OutputValue')
+          TASK_EXECUTION_ROLE=$(echo $OUTPUTS | jq -r '.[] | select(.OutputKey=="TaskExecutionRole") | .OutputValue')
+          TASK_ROLE=$(echo $OUTPUTS | jq -r '.[] | select(.OutputKey=="TaskRole") | .OutputValue')
+          API_GATEWAY_URL=$(echo $OUTPUTS | jq -r '.[] | select(.OutputKey=="ApiGatewayURL") | .OutputValue')
+          API_GATEWAY_ID=$(echo $OUTPUTS | jq -r '.[] | select(.OutputKey=="ApiGatewayId") | .OutputValue')
+          
+          echo "ecs_cluster=$ECS_CLUSTER" >> $GITHUB_OUTPUT
+          echo "ecs_service=$ECS_SERVICE" >> $GITHUB_OUTPUT
+          echo "efs_id=$EFS_ID" >> $GITHUB_OUTPUT
+          echo "task_execution_role=$TASK_EXECUTION_ROLE" >> $GITHUB_OUTPUT
+          echo "task_role=$TASK_ROLE" >> $GITHUB_OUTPUT
+          echo "api_gateway_url=$API_GATEWAY_URL" >> $GITHUB_OUTPUT
+          echo "api_gateway_id=$API_GATEWAY_ID" >> $GITHUB_OUTPUT
+
+      - name: Update task-definition.json
+        run: |
+          ECR_REPOSITORY_URI=$(aws ecr describe-repositories --repository-names sharp-server --query "repositories[0].repositoryUri" --output text)
+          
+          # Replace placeholders in task-definition.json
+          sed -i "s|\${ECS_EXECUTION_ROLE_ARN}|${{ steps.cfn-outputs.outputs.task_execution_role }}|g" task-definition.json
+          sed -i "s|\${ECS_TASK_ROLE_ARN}|${{ steps.cfn-outputs.outputs.task_role }}|g" task-definition.json
+          sed -i "s|\${ECR_REPOSITORY_URI}|$ECR_REPOSITORY_URI|g" task-definition.json
+          sed -i "s|\${IMAGE_TAG}|latest|g" task-definition.json
+          sed -i "s|\${AWS_REGION}|${{ env.AWS_REGION }}|g" task-definition.json
+          sed -i "s|\${EFS_ID}|${{ steps.cfn-outputs.outputs.efs_id }}|g" task-definition.json
+          
+          # Commit the updated task-definition.json
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          git add task-definition.json
+          git commit -m "Update task-definition.json with CloudFormation outputs" || echo "No changes to commit"
+          git push
+
+      - name: Summary
+        run: |
+          echo "## Infrastructure Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Resources Created:" >> $GITHUB_STEP_SUMMARY
+          echo "- ECS Cluster: ${{ steps.cfn-outputs.outputs.ecs_cluster }}" >> $GITHUB_STEP_SUMMARY
+          echo "- ECS Service: ${{ steps.cfn-outputs.outputs.ecs_service }}" >> $GITHUB_STEP_SUMMARY
+          echo "- EFS File System: ${{ steps.cfn-outputs.outputs.efs_id }}" >> $GITHUB_STEP_SUMMARY
+          echo "- API Gateway URL: ${{ steps.cfn-outputs.outputs.api_gateway_url }}" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -n "${{ github.event.inputs.certificate_arn }}" ]; then
+            echo "- Custom Domain: sharp.secretjuju.kr (requires Cloudflare DNS setup)" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Next Steps:" >> $GITHUB_STEP_SUMMARY
+          echo "1. Run the 'Deploy to Amazon ECS' workflow to deploy your application" >> $GITHUB_STEP_SUMMARY
+          echo "2. Access your application at the API Gateway URL" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -n "${{ github.event.inputs.certificate_arn }}" ]; then
+            echo "3. Set up Cloudflare DNS CNAME record for sharp.secretjuju.kr" >> $GITHUB_STEP_SUMMARY
+          fi 
