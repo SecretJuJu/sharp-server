@@ -214,157 +214,131 @@ jobs:
           echo "VPC_ID=${VPC_ID}" >> $GITHUB_ENV
           echo "SUBNET_IDS=${SUBNET_IDS}" >> $GITHUB_ENV
           
-          # 보안 그룹 생성 또는 가져오기
-          SG_NAME="ecs-sharp-server-sg"
-          SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=${SG_NAME}" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null || echo "")
-          
-          if [ -z "$SG_ID" ] || [ "$SG_ID" == "None" ]; then
-            echo "Creating security group..."
-            SG_ID=$(aws ec2 create-security-group --group-name ${SG_NAME} --description "Security group for Sharp Server ECS service" --vpc-id ${VPC_ID} --query 'GroupId' --output text)
+          # 보안 그룹 생성 또는 업데이트
+          SECURITY_GROUP_NAME="ecs-sharp-server-sg"
+          SECURITY_GROUP_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=${SECURITY_GROUP_NAME}" --query "SecurityGroups[0].GroupId" --output text)
+          if [ "$SECURITY_GROUP_ID" = "None" ] || [ -z "$SECURITY_GROUP_ID" ]; then
+            echo "Creating security group: ${SECURITY_GROUP_NAME}"
+            SECURITY_GROUP_ID=$(aws ec2 create-security-group --group-name ${SECURITY_GROUP_NAME} --description "Security group for ${ECS_SERVICE}" --vpc-id ${VPC_ID} --query "GroupId" --output text)
             
-            # 인바운드 규칙 추가
-            aws ec2 authorize-security-group-ingress --group-id ${SG_ID} --protocol tcp --port 3000 --cidr 0.0.0.0/0
-          fi
-          
-          echo "Using Security Group: ${SG_ID}"
-          echo "SG_ID=${SG_ID}" >> $GITHUB_ENV
-
-      - name: Create or update Network Load Balancer
-        run: |
-          # NLB 이름 및 대상 그룹 이름 설정
-          NLB_NAME="sharp-server-nlb"
-          TG_NAME="sharp-server-tg"
-          
-          # 서브넷 상세 정보 확인
-          echo "Checking subnet details..."
-          IFS=',' read -ra SUBNET_ARRAY <<< "$SUBNET_IDS"
-          VALID_SUBNETS=""
-          SUBNET_COUNT=0
-          
-          for subnet in "${SUBNET_ARRAY[@]}"; do
-            # 서브넷 상태 확인
-            SUBNET_STATE=$(aws ec2 describe-subnets --subnet-ids $subnet --query 'Subnets[0].State' --output text 2>/dev/null || echo "error")
-            SUBNET_AZ=$(aws ec2 describe-subnets --subnet-ids $subnet --query 'Subnets[0].AvailabilityZone' --output text 2>/dev/null || echo "unknown")
-            
-            if [ "$SUBNET_STATE" == "available" ]; then
-              echo "Subnet $subnet in $SUBNET_AZ is valid and available"
-              if [ $SUBNET_COUNT -lt 2 ]; then  # NLB에는 최소 2개의 서브넷이 필요하지만 너무 많으면 문제가 발생할 수 있음
-                if [ -z "$VALID_SUBNETS" ]; then
-                  VALID_SUBNETS="$subnet"
-                else
-                  VALID_SUBNETS="$VALID_SUBNETS,$subnet"
-                fi
-                SUBNET_COUNT=$((SUBNET_COUNT + 1))
-              fi
-            else
-              echo "Subnet $subnet is not available (state: $SUBNET_STATE)"
-            fi
-          done
-          
-          if [ $SUBNET_COUNT -lt 2 ]; then
-            echo "Error: At least 2 valid subnets are required for NLB. Only found $SUBNET_COUNT valid subnets."
-            echo "Trying to find more subnets in the VPC..."
-            
-            # 추가 서브넷 찾기
-            ALL_SUBNETS=$(aws ec2 describe-subnets \
-              --filters "Name=vpc-id,Values=${VPC_ID}" "Name=state,Values=available" \
-              --query 'Subnets[*].SubnetId' --output text | tr '\t' ' ')
-            
-            for subnet in $ALL_SUBNETS; do
-              # 이미 추가된 서브넷인지 확인
-              if [[ ! "$VALID_SUBNETS" == *"$subnet"* ]]; then
-                SUBNET_AZ=$(aws ec2 describe-subnets --subnet-ids $subnet --query 'Subnets[0].AvailabilityZone' --output text)
-                echo "Found additional subnet $subnet in $SUBNET_AZ"
-                
-                if [ -z "$VALID_SUBNETS" ]; then
-                  VALID_SUBNETS="$subnet"
-                else
-                  VALID_SUBNETS="$VALID_SUBNETS,$subnet"
-                fi
-                
-                SUBNET_COUNT=$((SUBNET_COUNT + 1))
-                if [ $SUBNET_COUNT -ge 2 ]; then
-                  break
-                fi
-              fi
-            done
-          fi
-          
-          if [ $SUBNET_COUNT -lt 2 ]; then
-            echo "Error: Could not find at least 2 valid subnets for NLB. Found only $SUBNET_COUNT subnets."
-            exit 1
-          fi
-          
-          echo "Using valid subnets: $VALID_SUBNETS"
-          
-          # NLB 존재 여부 확인
-          NLB_ARN=$(aws elbv2 describe-load-balancers --names ${NLB_NAME} --query 'LoadBalancers[0].LoadBalancerArn' --output text 2>/dev/null || echo "")
-          
-          # NLB 생성 또는 업데이트
-          if [ -z "$NLB_ARN" ] || [ "$NLB_ARN" == "None" ]; then
-            echo "Creating new Network Load Balancer..."
-            NLB_ARN=$(aws elbv2 create-load-balancer \
-              --name ${NLB_NAME} \
-              --type network \
-              --subnets $(echo $VALID_SUBNETS | tr ',' ' ') \
-              --query 'LoadBalancers[0].LoadBalancerArn' --output text)
-            
-            echo "Created Load Balancer: ${NLB_ARN}"
+            # 인바운드 규칙 추가 (포트 3000, 80, 443)
+            aws ec2 authorize-security-group-ingress --group-id ${SECURITY_GROUP_ID} --protocol tcp --port 3000 --cidr 0.0.0.0/0
+            aws ec2 authorize-security-group-ingress --group-id ${SECURITY_GROUP_ID} --protocol tcp --port 80 --cidr 0.0.0.0/0
+            aws ec2 authorize-security-group-ingress --group-id ${SECURITY_GROUP_ID} --protocol tcp --port 443 --cidr 0.0.0.0/0
+            echo "Added inbound rules for ports 3000, 80, and 443"
           else
-            echo "Load Balancer already exists: ${NLB_ARN}"
+            echo "Using existing security group: ${SECURITY_GROUP_ID}"
+            
+            # 기존 보안 그룹에 인바운드 규칙이 있는지 확인하고 없으면 추가
+            HTTP_RULE_EXISTS=$(aws ec2 describe-security-groups --group-ids ${SECURITY_GROUP_ID} --query "SecurityGroups[0].IpPermissions[?ToPort==\`80\`]" --output text)
+            if [ -z "$HTTP_RULE_EXISTS" ]; then
+              aws ec2 authorize-security-group-ingress --group-id ${SECURITY_GROUP_ID} --protocol tcp --port 80 --cidr 0.0.0.0/0
+              echo "Added inbound rule for port 80"
+            fi
+            
+            HTTPS_RULE_EXISTS=$(aws ec2 describe-security-groups --group-ids ${SECURITY_GROUP_ID} --query "SecurityGroups[0].IpPermissions[?ToPort==\`443\`]" --output text)
+            if [ -z "$HTTPS_RULE_EXISTS" ]; then
+              aws ec2 authorize-security-group-ingress --group-id ${SECURITY_GROUP_ID} --protocol tcp --port 443 --cidr 0.0.0.0/0
+              echo "Added inbound rule for port 443"
+            fi
           fi
-          
-          # 대상 그룹 존재 여부 확인
-          TG_ARN=$(aws elbv2 describe-target-groups --names ${TG_NAME} --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || echo "")
           
           # 대상 그룹 생성 또는 업데이트
-          if [ -z "$TG_ARN" ] || [ "$TG_ARN" == "None" ]; then
-            echo "Creating new Target Group..."
-            TG_ARN=$(aws elbv2 create-target-group \
-              --name ${TG_NAME} \
+          TARGET_GROUP_NAME="sharp-server-tg"
+          TARGET_GROUP_ARN=$(aws elbv2 describe-target-groups --names ${TARGET_GROUP_NAME} --query "TargetGroups[0].TargetGroupArn" --output text 2>/dev/null || echo "")
+          if [ "$TARGET_GROUP_ARN" = "None" ] || [ -z "$TARGET_GROUP_ARN" ]; then
+            echo "Creating target group: ${TARGET_GROUP_NAME}"
+            TARGET_GROUP_ARN=$(aws elbv2 create-target-group \
+              --name ${TARGET_GROUP_NAME} \
               --protocol TCP \
               --port 3000 \
               --vpc-id ${VPC_ID} \
               --target-type ip \
               --health-check-protocol HTTP \
-              --health-check-path "/" \
+              --health-check-path /health \
+              --health-check-port 3000 \
               --health-check-interval-seconds 30 \
               --health-check-timeout-seconds 10 \
               --healthy-threshold-count 3 \
               --unhealthy-threshold-count 3 \
-              --query 'TargetGroups[0].TargetGroupArn' --output text)
+              --query "TargetGroups[0].TargetGroupArn" \
+              --output text)
             
-            echo "Created Target Group: ${TG_ARN}"
+            # 대상 그룹 속성 설정
+            aws elbv2 modify-target-group-attributes \
+              --target-group-arn ${TARGET_GROUP_ARN} \
+              --attributes Key=deregistration_delay.timeout_seconds,Value=30
+            
+            echo "Created target group: ${TARGET_GROUP_ARN}"
           else
-            echo "Target Group already exists: ${TG_ARN}"
+            echo "Using existing target group: ${TARGET_GROUP_ARN}"
+            
+            # 기존 대상 그룹의 헬스 체크 설정 업데이트
+            aws elbv2 modify-target-group \
+              --target-group-arn ${TARGET_GROUP_ARN} \
+              --health-check-protocol HTTP \
+              --health-check-path /health \
+              --health-check-port 3000 \
+              --health-check-interval-seconds 30 \
+              --health-check-timeout-seconds 10 \
+              --healthy-threshold-count 3 \
+              --unhealthy-threshold-count 3
+            
+            echo "Updated health check settings for target group"
           fi
           
-          # 리스너 존재 여부 확인
-          LISTENER_ARN=$(aws elbv2 describe-listeners --load-balancer-arn ${NLB_ARN} --query 'Listeners[0].ListenerArn' --output text 2>/dev/null || echo "")
+          # NLB 생성 또는 업데이트
+          LOAD_BALANCER_NAME="sharp-server-nlb"
+          LOAD_BALANCER_ARN=$(aws elbv2 describe-load-balancers --names ${LOAD_BALANCER_NAME} --query "LoadBalancers[0].LoadBalancerArn" --output text 2>/dev/null || echo "")
+          if [ "$LOAD_BALANCER_ARN" = "None" ] || [ -z "$LOAD_BALANCER_ARN" ]; then
+            echo "Creating Network Load Balancer: ${LOAD_BALANCER_NAME}"
+            LOAD_BALANCER_ARN=$(aws elbv2 create-load-balancer \
+              --name ${LOAD_BALANCER_NAME} \
+              --type network \
+              --subnets ${SUBNET_IDS} \
+              --query "LoadBalancers[0].LoadBalancerArn" \
+              --output text)
+            echo "Created Network Load Balancer: ${LOAD_BALANCER_ARN}"
+          else
+            echo "Using existing Network Load Balancer: ${LOAD_BALANCER_ARN}"
+          fi
           
-          # 리스너 생성 또는 업데이트
-          if [ -z "$LISTENER_ARN" ] || [ "$LISTENER_ARN" == "None" ]; then
-            echo "Creating new Listener..."
-            LISTENER_ARN=$(aws elbv2 create-listener \
-              --load-balancer-arn ${NLB_ARN} \
+          # HTTP 리스너(80 포트) 생성 또는 확인
+          HTTP_LISTENER_ARN=$(aws elbv2 describe-listeners --load-balancer-arn ${LOAD_BALANCER_ARN} --query "Listeners[?Port==\`80\`].ListenerArn" --output text 2>/dev/null || echo "")
+          if [ "$HTTP_LISTENER_ARN" = "None" ] || [ -z "$HTTP_LISTENER_ARN" ]; then
+            echo "Creating HTTP listener on port 80"
+            HTTP_LISTENER_ARN=$(aws elbv2 create-listener \
+              --load-balancer-arn ${LOAD_BALANCER_ARN} \
               --protocol TCP \
               --port 80 \
-              --default-actions Type=forward,TargetGroupArn=${TG_ARN} \
-              --query 'Listeners[0].ListenerArn' --output text)
-            
-            echo "Created Listener: ${LISTENER_ARN}"
+              --default-actions Type=forward,TargetGroupArn=${TARGET_GROUP_ARN} \
+              --query "Listeners[0].ListenerArn" \
+              --output text)
+            echo "Created HTTP listener: ${HTTP_LISTENER_ARN}"
           else
-            echo "Listener already exists: ${LISTENER_ARN}"
+            echo "Using existing HTTP listener: ${HTTP_LISTENER_ARN}"
+          fi
+          
+          # HTTPS 리스너(443 포트) 생성 또는 확인
+          HTTPS_LISTENER_ARN=$(aws elbv2 describe-listeners --load-balancer-arn ${LOAD_BALANCER_ARN} --query "Listeners[?Port==\`443\`].ListenerArn" --output text 2>/dev/null || echo "")
+          if [ "$HTTPS_LISTENER_ARN" = "None" ] || [ -z "$HTTPS_LISTENER_ARN" ]; then
+            echo "Creating HTTPS listener on port 443"
+            HTTPS_LISTENER_ARN=$(aws elbv2 create-listener \
+              --load-balancer-arn ${LOAD_BALANCER_ARN} \
+              --protocol TCP \
+              --port 443 \
+              --default-actions Type=forward,TargetGroupArn=${TARGET_GROUP_ARN} \
+              --query "Listeners[0].ListenerArn" \
+              --output text)
+            echo "Created HTTPS listener: ${HTTPS_LISTENER_ARN}"
+          else
+            echo "Using existing HTTPS listener: ${HTTPS_LISTENER_ARN}"
           fi
           
           # NLB DNS 이름 가져오기
-          NLB_DNS=$(aws elbv2 describe-load-balancers --load-balancer-arns ${NLB_ARN} --query 'LoadBalancers[0].DNSName' --output text)
-          echo "NLB_DNS=${NLB_DNS}" >> $GITHUB_ENV
-          echo "TG_ARN=${TG_ARN}" >> $GITHUB_ENV
-          echo "VALID_SUBNETS=${VALID_SUBNETS}" >> $GITHUB_ENV
-          
-          echo "Network Load Balancer DNS: ${NLB_DNS}"
-          echo "For Cloudflare, create a CNAME record pointing to: ${NLB_DNS}"
+          NLB_DNS_NAME=$(aws elbv2 describe-load-balancers --load-balancer-arns ${LOAD_BALANCER_ARN} --query "LoadBalancers[0].DNSName" --output text)
+          echo "NLB DNS Name: ${NLB_DNS_NAME}"
+          echo "NLB_DNS_NAME=${NLB_DNS_NAME}" >> $GITHUB_ENV
 
       - name: Create or update ECS service
         run: |
@@ -410,7 +384,7 @@ jobs:
           fi
           
           # 유효한 서브넷 사용
-          echo "Using valid subnets for ECS service: ${VALID_SUBNETS}"
+          echo "Using valid subnets for ECS service: ${SUBNET_IDS}"
           
           # 새 서비스 생성 (로드 밸런서와 연결)
           echo "Creating new ECS service with load balancer..."
@@ -420,8 +394,8 @@ jobs:
             --task-definition ${TASK_DEF_ARN} \
             --desired-count 1 \
             --launch-type FARGATE \
-            --network-configuration "awsvpcConfiguration={subnets=[${VALID_SUBNETS}],securityGroups=[${SG_ID}],assignPublicIp=ENABLED}" \
-            --load-balancers "targetGroupArn=${TG_ARN},containerName=${CONTAINER_NAME},containerPort=3000" \
+            --network-configuration "awsvpcConfiguration={subnets=[${SUBNET_IDS}],securityGroups=[${SECURITY_GROUP_ID}],assignPublicIp=ENABLED}" \
+            --load-balancers "targetGroupArn=${TARGET_GROUP_ARN},containerName=${CONTAINER_NAME},containerPort=3000" \
             --scheduling-strategy REPLICA
           
           # 서비스 안정화 대기
@@ -471,9 +445,8 @@ jobs:
           fi
           
           # NLB DNS 정보 출력
-          if [ ! -z "$NLB_DNS" ]; then
-            echo "Service is accessible via Network Load Balancer: http://${NLB_DNS}"
-            echo "For Cloudflare, create a CNAME record pointing to: ${NLB_DNS}"
+          if [ ! -z "$NLB_DNS_NAME" ]; then
+            echo "Service is accessible via Network Load Balancer: http://${NLB_DNS_NAME}"
           fi
 
       - name: Post-deployment notification
