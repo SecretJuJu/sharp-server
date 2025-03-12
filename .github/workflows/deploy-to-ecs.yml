@@ -13,6 +13,8 @@ env:
   ECS_SERVICE: sharp-server-service
   ECS_TASK_DEFINITION: task-definition.json
   CONTAINER_NAME: sharp-server
+  ECS_EXECUTION_ROLE_ARN: ""
+  ECS_TASK_ROLE_ARN: ""
 
 jobs:
   deploy:
@@ -37,6 +39,48 @@ jobs:
         run: |
           aws ecr describe-repositories --repository-names ${ECR_REPOSITORY} || aws ecr create-repository --repository-name ${ECR_REPOSITORY}
 
+      - name: Create ECS IAM roles if not exist
+        run: |
+          # ECS 실행 역할 생성 또는 가져오기
+          EXECUTION_ROLE_NAME="ecsTaskExecutionRole"
+          EXECUTION_ROLE_ARN=$(aws iam get-role --role-name ${EXECUTION_ROLE_NAME} --query 'Role.Arn' --output text 2>/dev/null || echo "")
+          
+          if [ -z "$EXECUTION_ROLE_ARN" ]; then
+            echo "Creating ECS execution role..."
+            EXECUTION_ROLE_ARN=$(aws iam create-role \
+              --role-name ${EXECUTION_ROLE_NAME} \
+              --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ecs-tasks.amazonaws.com"},"Action":"sts:AssumeRole"}]}' \
+              --query 'Role.Arn' --output text)
+            
+            aws iam attach-role-policy \
+              --role-name ${EXECUTION_ROLE_NAME} \
+              --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+          fi
+          
+          # ECS 태스크 역할 생성 또는 가져오기
+          TASK_ROLE_NAME="ecsTaskRole"
+          TASK_ROLE_ARN=$(aws iam get-role --role-name ${TASK_ROLE_NAME} --query 'Role.Arn' --output text 2>/dev/null || echo "")
+          
+          if [ -z "$TASK_ROLE_ARN" ]; then
+            echo "Creating ECS task role..."
+            TASK_ROLE_ARN=$(aws iam create-role \
+              --role-name ${TASK_ROLE_NAME} \
+              --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ecs-tasks.amazonaws.com"},"Action":"sts:AssumeRole"}]}' \
+              --query 'Role.Arn' --output text)
+            
+            aws iam attach-role-policy \
+              --role-name ${TASK_ROLE_NAME} \
+              --policy-arn arn:aws:iam::aws:policy/AmazonS3FullAccess
+          fi
+          
+          echo "ECS_EXECUTION_ROLE_ARN=${EXECUTION_ROLE_ARN}" >> $GITHUB_ENV
+          echo "ECS_TASK_ROLE_ARN=${TASK_ROLE_ARN}" >> $GITHUB_ENV
+
+      - name: Create ECS cluster if not exists
+        run: |
+          aws ecs describe-clusters --clusters ${ECS_CLUSTER} --query 'clusters[0].clusterName' --output text 2>/dev/null || \
+          aws ecs create-cluster --cluster-name ${ECS_CLUSTER}
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v2
 
@@ -56,27 +100,84 @@ jobs:
           platforms: linux/amd64
           tags: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
 
-      - name: Fill in the new image ID in the Amazon ECS task definition
-        id: task-def
-        uses: aws-actions/amazon-ecs-render-task-definition@v1
-        with:
-          task-definition: ${{ env.ECS_TASK_DEFINITION }}
-          container-name: ${{ env.CONTAINER_NAME }}
-          image: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
-          environment-variables: |
-            NODE_ENV=production
-            PORT=3000
+      - name: Update task definition
+        run: |
+          # task-definition.json 파일에서 변수 대체
+          sed -i "s|\${ECS_EXECUTION_ROLE_ARN}|${ECS_EXECUTION_ROLE_ARN}|g" ${ECS_TASK_DEFINITION}
+          sed -i "s|\${ECS_TASK_ROLE_ARN}|${ECS_TASK_ROLE_ARN}|g" ${ECS_TASK_DEFINITION}
+          sed -i "s|\${ECR_REPOSITORY_URI}|${{ steps.login-ecr.outputs.registry }}/${ECR_REPOSITORY}|g" ${ECS_TASK_DEFINITION}
+          sed -i "s|\${IMAGE_TAG}|${GITHUB_SHA}|g" ${ECS_TASK_DEFINITION}
+          sed -i "s|\${AWS_REGION}|${AWS_REGION}|g" ${ECS_TASK_DEFINITION}
+          
+          cat ${ECS_TASK_DEFINITION}
 
-      - name: Deploy Amazon ECS task definition
-        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
-        with:
-          task-definition: ${{ steps.task-def.outputs.task-definition }}
-          service: ${{ env.ECS_SERVICE }}
-          cluster: ${{ env.ECS_CLUSTER }}
-          wait-for-service-stability: true
+      - name: Register task definition
+        id: register-task-def
+        run: |
+          TASK_DEF_ARN=$(aws ecs register-task-definition --cli-input-json file://${ECS_TASK_DEFINITION} --query 'taskDefinition.taskDefinitionArn' --output text)
+          echo "TASK_DEF_ARN=${TASK_DEF_ARN}" >> $GITHUB_ENV
+          echo "::set-output name=task-definition-arn::${TASK_DEF_ARN}"
+
+      - name: Create or update ECS service
+        run: |
+          # 서비스가 존재하는지 확인
+          SERVICE_EXISTS=$(aws ecs describe-services --cluster ${ECS_CLUSTER} --services ${ECS_SERVICE} --query 'services[0].serviceName' --output text 2>/dev/null || echo "")
+          
+          # 기본 VPC와 서브넷 가져오기
+          VPC_ID=$(aws ec2 describe-vpcs --filters "Name=isDefault,Values=true" --query 'Vpcs[0].VpcId' --output text)
+          SUBNET_IDS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=${VPC_ID}" --query 'Subnets[?MapPublicIpOnLaunch==`true`].SubnetId' --output text | tr '\t' ',')
+          
+          # 보안 그룹 생성 또는 가져오기
+          SG_NAME="ecs-sharp-server-sg"
+          SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=${SG_NAME}" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null || echo "")
+          
+          if [ -z "$SG_ID" ]; then
+            echo "Creating security group..."
+            SG_ID=$(aws ec2 create-security-group --group-name ${SG_NAME} --description "Security group for Sharp Server ECS service" --vpc-id ${VPC_ID} --query 'GroupId' --output text)
+            
+            # 인바운드 규칙 추가
+            aws ec2 authorize-security-group-ingress --group-id ${SG_ID} --protocol tcp --port 3000 --cidr 0.0.0.0/0
+          fi
+          
+          if [ -z "$SERVICE_EXISTS" ]; then
+            echo "Creating new ECS service..."
+            aws ecs create-service \
+              --cluster ${ECS_CLUSTER} \
+              --service-name ${ECS_SERVICE} \
+              --task-definition ${TASK_DEF_ARN} \
+              --desired-count 1 \
+              --launch-type FARGATE \
+              --network-configuration "awsvpcConfiguration={subnets=[${SUBNET_IDS}],securityGroups=[${SG_ID}],assignPublicIp=ENABLED}" \
+              --scheduling-strategy REPLICA
+          else
+            echo "Updating existing ECS service..."
+            aws ecs update-service \
+              --cluster ${ECS_CLUSTER} \
+              --service ${ECS_SERVICE} \
+              --task-definition ${TASK_DEF_ARN} \
+              --force-new-deployment
+          fi
+          
+          # 서비스 안정화 대기
+          echo "Waiting for service to stabilize..."
+          aws ecs wait services-stable --cluster ${ECS_CLUSTER} --services ${ECS_SERVICE}
+
+      - name: Get service details
+        if: success()
+        run: |
+          # 서비스 세부 정보 가져오기
+          TASK_ARN=$(aws ecs list-tasks --cluster ${ECS_CLUSTER} --service-name ${ECS_SERVICE} --query 'taskArns[0]' --output text)
+          
+          if [ ! -z "$TASK_ARN" ]; then
+            ENI_ID=$(aws ecs describe-tasks --cluster ${ECS_CLUSTER} --tasks ${TASK_ARN} --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' --output text)
+            
+            if [ ! -z "$ENI_ID" ]; then
+              PUBLIC_IP=$(aws ec2 describe-network-interfaces --network-interface-ids ${ENI_ID} --query 'NetworkInterfaces[0].Association.PublicIp' --output text)
+              echo "Service is running at: http://${PUBLIC_IP}:3000"
+            fi
+          fi
 
       - name: Post-deployment notification
         if: success()
         run: |
-          echo "Deployment to ECS completed successfully!"
-          echo "Service URL: http://${ECS_SERVICE}.${AWS_REGION}.ecs.amazonaws.com:3000" 
+          echo "Deployment to ECS completed successfully!" 

@@ -52,9 +52,8 @@
   "volumes": [
     {
       "name": "uploads",
-      "efsVolumeConfiguration": {
-        "fileSystemId": "${EFS_ID}",
-        "rootDirectory": "/"
+      "host": {
+        "sourcePath": "/tmp/uploads"
       }
     }
   ]
