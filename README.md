@@ -17,6 +17,7 @@
 - **컨테이너화**: Docker, PM2
 - **인프라**: AWS ECS, Fargate, EC2 스팟 인스턴스, EFS, CloudFormation, API Gateway
 - **CI/CD**: GitHub Actions
+- **패키지 관리**: pnpm
 
 ## 배포 방법
 
@@ -335,11 +336,15 @@ Cloudflare에 등록된 도메인(예: secretjuju.kr)을 API Gateway에 연결�
 ### 로컬에서 실행하기
 
 ```bash
+# pnpm 설치 (처음 한 번만)
+corepack enable
+corepack prepare pnpm@latest --activate
+
 # 의존성 설치
-npm install
+pnpm install
 
 # 개발 서버 실행
-npm run dev
+pnpm run dev
 ```
 
 ### Docker로 실행하기

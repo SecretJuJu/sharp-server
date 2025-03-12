@@ -9,15 +9,18 @@ RUN apk add --no-cache \
     g++ \
     make
 
+# pnpm 설치
+RUN corepack enable && corepack prepare pnpm@latest --activate
+
 # 작업 디렉토리 생성
 WORKDIR /app
 
 # 패키지 파일 복사 및 의존성 설치
-COPY package*.json ./
-RUN npm install
+COPY package.json pnpm-lock.yaml* ./
+RUN pnpm install --frozen-lockfile
 
 # PM2 전역 설치
-RUN npm install -g pm2
+RUN pnpm add -g pm2
 
 # 소스 코드 복사
 COPY . .
