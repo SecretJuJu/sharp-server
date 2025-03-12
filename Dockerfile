@@ -29,7 +29,7 @@ ENV npm_config_platform=linuxmusl
 
 # 의존성 설치 (Sharp 모듈을 위한 특별 설정 포함)
 RUN pnpm config set node-linker hoisted
-RUN pnpm install --ignore-scripts=false --foreground-scripts
+RUN pnpm install --ignore-scripts=false
 RUN pnpm rebuild sharp --platform=linuxmusl --arch=x64
 
 # PM2 전역 설치 (npm 사용)
