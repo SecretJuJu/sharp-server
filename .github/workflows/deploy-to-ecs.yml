@@ -82,6 +82,40 @@ jobs:
           echo "ECS_EXECUTION_ROLE_ARN=${EXECUTION_ROLE_ARN}" >> $GITHUB_ENV
           echo "ECS_TASK_ROLE_ARN=${TASK_ROLE_ARN}" >> $GITHUB_ENV
 
+      - name: Ensure required IAM permissions
+        run: |
+          # GitHub Actions 사용자에게 필요한 권한 확인
+          echo "Checking IAM permissions for NLB and ECS operations..."
+          
+          # 필요한 권한 목록
+          REQUIRED_PERMISSIONS=(
+            "elasticloadbalancing:CreateLoadBalancer"
+            "elasticloadbalancing:CreateTargetGroup"
+            "elasticloadbalancing:CreateListener"
+            "elasticloadbalancing:DescribeLoadBalancers"
+            "elasticloadbalancing:DescribeTargetGroups"
+            "elasticloadbalancing:DescribeListeners"
+            "elasticloadbalancing:RegisterTargets"
+            "ec2:DescribeSubnets"
+            "ec2:DescribeVpcs"
+            "ec2:DescribeSecurityGroups"
+            "ec2:CreateSecurityGroup"
+            "ec2:AuthorizeSecurityGroupIngress"
+            "ec2:DescribeNetworkInterfaces"
+          )
+          
+          # 권한 확인 (실제로는 확인할 수 없으므로 안내 메시지만 출력)
+          echo "The following permissions are required for NLB creation and management:"
+          for perm in "${REQUIRED_PERMISSIONS[@]}"; do
+            echo "- $perm"
+          done
+          
+          echo "If you encounter permission errors, please ensure your AWS credentials have these permissions."
+          echo "You may need to attach the following managed policies to your IAM user or role:"
+          echo "- AmazonEC2FullAccess"
+          echo "- ElasticLoadBalancingFullAccess"
+          echo "- AmazonECS-FullAccess"
+
       - name: Create ECS cluster
         run: |
           # 클러스터 존재 여부 확인
@@ -160,7 +194,20 @@ jobs:
         run: |
           # 기본 VPC와 서브넷 가져오기
           VPC_ID=$(aws ec2 describe-vpcs --filters "Name=isDefault,Values=true" --query 'Vpcs[0].VpcId' --output text)
-          SUBNET_IDS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=${VPC_ID}" --query 'Subnets[?MapPublicIpOnLaunch==`true`].SubnetId' --output text | tr '\t' ',')
+          
+          # 퍼블릭 서브넷만 필터링 (인터넷 게이트웨이로 라우팅되는 서브넷)
+          echo "Finding public subnets in VPC ${VPC_ID}..."
+          SUBNET_IDS=$(aws ec2 describe-subnets \
+            --filters "Name=vpc-id,Values=${VPC_ID}" "Name=map-public-ip-on-launch,Values=true" \
+            --query 'Subnets[*].SubnetId' --output text | tr '\t' ',')
+          
+          # 서브넷이 없으면 모든 서브넷 사용
+          if [ -z "$SUBNET_IDS" ]; then
+            echo "No public subnets found, using all subnets in VPC..."
+            SUBNET_IDS=$(aws ec2 describe-subnets \
+              --filters "Name=vpc-id,Values=${VPC_ID}" \
+              --query 'Subnets[*].SubnetId' --output text | tr '\t' ',')
+          fi
           
           echo "Using VPC: ${VPC_ID}"
           echo "Using Subnets: ${SUBNET_IDS}"
@@ -188,13 +235,67 @@ jobs:
           NLB_NAME="sharp-server-nlb"
           TG_NAME="sharp-server-tg"
           
-          # 서브넷 ID 가져오기
-          SUBNET_IDS_ARRAY=($(echo ${SUBNET_IDS} | tr ',' ' '))
-          SUBNET_LIST=""
-          for subnet in "${SUBNET_IDS_ARRAY[@]}"; do
-            SUBNET_LIST="${SUBNET_LIST} SubnetId=${subnet}"
+          # 서브넷 상세 정보 확인
+          echo "Checking subnet details..."
+          IFS=',' read -ra SUBNET_ARRAY <<< "$SUBNET_IDS"
+          VALID_SUBNETS=""
+          SUBNET_COUNT=0
+          
+          for subnet in "${SUBNET_ARRAY[@]}"; do
+            # 서브넷 상태 확인
+            SUBNET_STATE=$(aws ec2 describe-subnets --subnet-ids $subnet --query 'Subnets[0].State' --output text 2>/dev/null || echo "error")
+            SUBNET_AZ=$(aws ec2 describe-subnets --subnet-ids $subnet --query 'Subnets[0].AvailabilityZone' --output text 2>/dev/null || echo "unknown")
+            
+            if [ "$SUBNET_STATE" == "available" ]; then
+              echo "Subnet $subnet in $SUBNET_AZ is valid and available"
+              if [ $SUBNET_COUNT -lt 2 ]; then  # NLB에는 최소 2개의 서브넷이 필요하지만 너무 많으면 문제가 발생할 수 있음
+                if [ -z "$VALID_SUBNETS" ]; then
+                  VALID_SUBNETS="$subnet"
+                else
+                  VALID_SUBNETS="$VALID_SUBNETS,$subnet"
+                fi
+                SUBNET_COUNT=$((SUBNET_COUNT + 1))
+              fi
+            else
+              echo "Subnet $subnet is not available (state: $SUBNET_STATE)"
+            fi
           done
-          SUBNET_LIST=$(echo ${SUBNET_LIST} | xargs)
+          
+          if [ $SUBNET_COUNT -lt 2 ]; then
+            echo "Error: At least 2 valid subnets are required for NLB. Only found $SUBNET_COUNT valid subnets."
+            echo "Trying to find more subnets in the VPC..."
+            
+            # 추가 서브넷 찾기
+            ALL_SUBNETS=$(aws ec2 describe-subnets \
+              --filters "Name=vpc-id,Values=${VPC_ID}" "Name=state,Values=available" \
+              --query 'Subnets[*].SubnetId' --output text | tr '\t' ' ')
+            
+            for subnet in $ALL_SUBNETS; do
+              # 이미 추가된 서브넷인지 확인
+              if [[ ! "$VALID_SUBNETS" == *"$subnet"* ]]; then
+                SUBNET_AZ=$(aws ec2 describe-subnets --subnet-ids $subnet --query 'Subnets[0].AvailabilityZone' --output text)
+                echo "Found additional subnet $subnet in $SUBNET_AZ"
+                
+                if [ -z "$VALID_SUBNETS" ]; then
+                  VALID_SUBNETS="$subnet"
+                else
+                  VALID_SUBNETS="$VALID_SUBNETS,$subnet"
+                fi
+                
+                SUBNET_COUNT=$((SUBNET_COUNT + 1))
+                if [ $SUBNET_COUNT -ge 2 ]; then
+                  break
+                fi
+              fi
+            done
+          fi
+          
+          if [ $SUBNET_COUNT -lt 2 ]; then
+            echo "Error: Could not find at least 2 valid subnets for NLB. Found only $SUBNET_COUNT subnets."
+            exit 1
+          fi
+          
+          echo "Using valid subnets: $VALID_SUBNETS"
           
           # NLB 존재 여부 확인
           NLB_ARN=$(aws elbv2 describe-load-balancers --names ${NLB_NAME} --query 'LoadBalancers[0].LoadBalancerArn' --output text 2>/dev/null || echo "")
@@ -205,7 +306,7 @@ jobs:
             NLB_ARN=$(aws elbv2 create-load-balancer \
               --name ${NLB_NAME} \
               --type network \
-              --subnets ${SUBNET_LIST} \
+              --subnets $(echo $VALID_SUBNETS | tr ',' ' ') \
               --query 'LoadBalancers[0].LoadBalancerArn' --output text)
             
             echo "Created Load Balancer: ${NLB_ARN}"
@@ -260,6 +361,7 @@ jobs:
           NLB_DNS=$(aws elbv2 describe-load-balancers --load-balancer-arns ${NLB_ARN} --query 'LoadBalancers[0].DNSName' --output text)
           echo "NLB_DNS=${NLB_DNS}" >> $GITHUB_ENV
           echo "TG_ARN=${TG_ARN}" >> $GITHUB_ENV
+          echo "VALID_SUBNETS=${VALID_SUBNETS}" >> $GITHUB_ENV
           
           echo "Network Load Balancer DNS: ${NLB_DNS}"
           echo "For Cloudflare, create a CNAME record pointing to: ${NLB_DNS}"
@@ -307,6 +409,9 @@ jobs:
             sleep 60
           fi
           
+          # 유효한 서브넷 사용
+          echo "Using valid subnets for ECS service: ${VALID_SUBNETS}"
+          
           # 새 서비스 생성 (로드 밸런서와 연결)
           echo "Creating new ECS service with load balancer..."
           aws ecs create-service \
@@ -315,7 +420,7 @@ jobs:
             --task-definition ${TASK_DEF_ARN} \
             --desired-count 1 \
             --launch-type FARGATE \
-            --network-configuration "awsvpcConfiguration={subnets=[${SUBNET_IDS}],securityGroups=[${SG_ID}],assignPublicIp=ENABLED}" \
+            --network-configuration "awsvpcConfiguration={subnets=[${VALID_SUBNETS}],securityGroups=[${SG_ID}],assignPublicIp=ENABLED}" \
             --load-balancers "targetGroupArn=${TG_ARN},containerName=${CONTAINER_NAME},containerPort=3000" \
             --scheduling-strategy REPLICA
           

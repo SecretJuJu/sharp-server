@@ -220,7 +220,13 @@ GitHub 저장소에 다음 시크릿을 설정합니다:
         "elasticloadbalancing:DescribeTargetGroups",
         "elasticloadbalancing:RegisterTargets",
         "elasticloadbalancing:DeregisterTargets",
-        "elasticloadbalancing:DescribeTargetHealth"
+        "elasticloadbalancing:DescribeTargetHealth",
+        "elasticloadbalancing:SetSecurityGroups",
+        "elasticloadbalancing:SetSubnets",
+        "elasticloadbalancing:AddTags",
+        "elasticloadbalancing:RemoveTags",
+        "elasticloadbalancing:ModifyTargetGroupAttributes",
+        "elasticloadbalancing:ModifyListenerAttributes"
       ],
       "Resource": "*"
     },
@@ -260,9 +266,37 @@ GitHub 저장소에 다음 시크릿을 설정합니다:
 - **Auto Scaling**: 자동 확장 그룹 관리
 - **Application Auto Scaling**: 애플리케이션 자동 확장 관리
 - **SSM**: 시스템 관리자 파라미터 접근
-- **Elastic Load Balancing**: 로드 밸런서 관리
+- **Elastic Load Balancing**: 로드 밸런서 관리 (ALB 및 NLB)
 - **API Gateway**: API 게이트웨이 관리
 - **ACM**: 인증서 관리
+
+### NLB(Network Load Balancer) 배포를 위한 권한
+
+NLB를 생성하고 관리하기 위해서는 다음과 같은 IAM 권한이 필요합니다:
+
+1. **Elastic Load Balancing 권한**:
+   - elasticloadbalancing:CreateLoadBalancer
+   - elasticloadbalancing:CreateTargetGroup
+   - elasticloadbalancing:CreateListener
+   - elasticloadbalancing:DescribeLoadBalancers
+   - elasticloadbalancing:DescribeTargetGroups
+   - elasticloadbalancing:DescribeListeners
+   - elasticloadbalancing:RegisterTargets
+   - elasticloadbalancing:SetSubnets
+   - elasticloadbalancing:ModifyTargetGroupAttributes
+
+2. **EC2 권한**:
+   - ec2:DescribeSubnets
+   - ec2:DescribeVpcs
+   - ec2:DescribeSecurityGroups
+   - ec2:CreateSecurityGroup
+   - ec2:AuthorizeSecurityGroupIngress
+   - ec2:DescribeNetworkInterfaces
+
+이러한 권한은 다음 관리형 정책을 통해 얻을 수 있습니다:
+- AmazonEC2FullAccess
+- ElasticLoadBalancingFullAccess
+- AmazonECS-FullAccess
 
 ### 배포 단계
 
@@ -334,6 +368,59 @@ Cloudflare에 등록된 도메인(예: secretjuju.kr)을 API Gateway에 연결�
 
 1. 브라우저에서 `https://sharp.secretjuju.kr`로 접속하여 서비스가 정상적으로 작동하는지 확인합니다.
 2. 문제가 있는 경우 Cloudflare의 SSL/TLS 설정과 DNS 설정을 확인합니다.
+
+## Cloudflare와 NLB 연결
+
+Cloudflare에 등록된 도메인을 NLB(Network Load Balancer)에 연결하려면 다음 단계를 수행해야 합니다:
+
+### 1. NLB 배포 확인
+
+1. GitHub Actions 워크플로우가 성공적으로 완료되면 NLB가 생성됩니다.
+2. 워크플로우 로그에서 NLB DNS 이름을 확인합니다 (예: `sharp-server-nlb-123456789.ap-northeast-2.elb.amazonaws.com`).
+3. 또는 AWS 콘솔에서 EC2 > 로드 밸런서로 이동하여 `sharp-server-nlb`의 DNS 이름을 확인합니다.
+
+### 2. Cloudflare에서 CNAME 레코드 추가
+
+1. Cloudflare 대시보드에서 도메인(예: secretjuju.kr)으로 이동합니다.
+2. DNS 섹션으로 이동합니다.
+3. 다음과 같은 CNAME 레코드를 추가합니다:
+   - 이름: `sharp` (또는 원하는 서브도메인)
+   - 대상: NLB DNS 이름 (예: `sharp-server-nlb-123456789.ap-northeast-2.elb.amazonaws.com`)
+   - 프록시 상태: 프록시 활성화 (주황색 구름)
+   - TTL: 자동
+
+### 3. Cloudflare SSL/TLS 설정
+
+1. Cloudflare 대시보드에서 SSL/TLS 섹션으로 이동합니다.
+2. 개요 탭에서 암호화 모드를 "전체" 또는 "전체(엄격)"로 설정합니다.
+3. 엣지 인증서 탭에서 항상 HTTPS 사용이 활성화되어 있는지 확인합니다.
+
+### 4. (선택 사항) 페이지 규칙 설정
+
+1. Cloudflare 대시보드에서 페이지 규칙 섹션으로 이동합니다.
+2. "페이지 규칙 생성" 버튼을 클릭합니다.
+3. URL 패턴에 `sharp.secretjuju.kr/*`를 입력합니다.
+4. "설정" 섹션에서 "항상 HTTPS 사용"을 선택합니다.
+5. "저장 및 배포" 버튼을 클릭합니다.
+
+### 5. 연결 확인
+
+1. 브라우저에서 `https://sharp.secretjuju.kr`로 접속하여 서비스가 정상적으로 작동하는지 확인합니다.
+2. 문제가 있는 경우:
+   - Cloudflare의 SSL/TLS 설정을 확인합니다.
+   - DNS 전파가 완료될 때까지 기다립니다 (최대 24시간).
+   - NLB 상태 및 대상 그룹 상태를 AWS 콘솔에서 확인합니다.
+   - ECS 서비스 로그를 CloudWatch에서 확인합니다.
+
+### NLB와 API Gateway 비교
+
+| 기능 | NLB | API Gateway |
+|------|-----|-------------|
+| 비용 | 시간당 요금 + 데이터 처리 요금 | 요청 수 기반 요금 |
+| 지연 시간 | 매우 낮음 | 약간 높음 |
+| 프로토콜 | TCP/UDP/TLS | HTTP/HTTPS/WebSocket |
+| 고급 기능 | 정적 IP, 고성능 | API 키, 스로틀링, 캐싱 |
+| 적합한 사용 사례 | 고성능 웹 서비스, 게임 서버 | API 관리, 마이크로서비스 |
 
 ## 자동 스케일링
 
