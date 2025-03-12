@@ -81,6 +81,11 @@ jobs:
           aws ecs describe-clusters --clusters ${ECS_CLUSTER} --query 'clusters[0].clusterName' --output text 2>/dev/null || \
           aws ecs create-cluster --cluster-name ${ECS_CLUSTER}
 
+      - name: Create CloudWatch Logs group if not exists
+        run: |
+          aws logs describe-log-groups --log-group-name-prefix "/ecs/sharp-server" --query 'logGroups[0].logGroupName' --output text 2>/dev/null || \
+          aws logs create-log-group --log-group-name "/ecs/sharp-server"
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v2
 
@@ -116,7 +121,7 @@ jobs:
         run: |
           TASK_DEF_ARN=$(aws ecs register-task-definition --cli-input-json file://${ECS_TASK_DEFINITION} --query 'taskDefinition.taskDefinitionArn' --output text)
           echo "TASK_DEF_ARN=${TASK_DEF_ARN}" >> $GITHUB_ENV
-          echo "::set-output name=task-definition-arn::${TASK_DEF_ARN}"
+          echo "task-definition-arn=${TASK_DEF_ARN}" >> $GITHUB_OUTPUT
 
       - name: Create or update ECS service
         run: |

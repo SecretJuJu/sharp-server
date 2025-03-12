@@ -29,8 +29,8 @@ RUN npm install -g pm2
 # 소스 코드 복사
 COPY . .
 
-# 업로드 디렉토리 생성
-RUN mkdir -p uploads && chmod 777 uploads
+# 업로드 디렉토리 생성 및 권한 설정
+RUN mkdir -p /app/uploads && chmod 777 /app/uploads
 
 # 포트 노출
 EXPOSE 3000

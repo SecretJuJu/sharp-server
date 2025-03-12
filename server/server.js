@@ -200,14 +200,15 @@ app.post('/api/process', upload.single('image'), async (req, res) => {
     // 파일명 생성
     const timestamp = Date.now();
     const outputFilename = `image_${width}x${height}_q${quality}_${timestamp}.${fileExtension}`;
-    const outputPath = path.join(uploadsDir, outputFilename);
     
+    // 메모리에서 처리하고 직접 응답으로 전송
     // Sharp 인스턴스 생성 및 리사이징
     let sharpInstance = sharp(req.file.buffer)
       .resize(parseInt(width), parseInt(height));
     
     // 선택된 형식에 따라 출력 형식 설정
     const parsedQuality = parseInt(quality);
+    let processedBuffer;
     
     switch (format) {
       case 'jpeg':
@@ -224,7 +225,7 @@ app.post('/api/process', upload.single('image'), async (req, res) => {
           overshootDeringing, optimizeCoding, useMozjpeg
         });
         
-        await sharpInstance
+        processedBuffer = await sharpInstance
           .jpeg({ 
             quality: parsedQuality,
             progressive: progressive,
@@ -234,50 +235,50 @@ app.post('/api/process', upload.single('image'), async (req, res) => {
             optimizeCoding: optimizeCoding,
             mozjpeg: useMozjpeg
           })
-          .toFile(outputPath);
+          .toBuffer();
         break;
         
       case 'png':
-        await sharpInstance
+        processedBuffer = await sharpInstance
           .png({ 
             compressionLevel: 9,
             adaptiveFiltering: true
           })
-          .toFile(outputPath);
+          .toBuffer();
         break;
         
       case 'webp':
-        await sharpInstance
+        processedBuffer = await sharpInstance
           .webp({ 
             quality: parsedQuality,
             lossless: parsedQuality >= 100
           })
-          .toFile(outputPath);
+          .toBuffer();
         break;
         
       case 'avif':
-        await sharpInstance
+        processedBuffer = await sharpInstance
           .avif({ 
             quality: parsedQuality,
             lossless: parsedQuality >= 100
           })
-          .toFile(outputPath);
+          .toBuffer();
         break;
         
       case 'tiff':
-        await sharpInstance
+        processedBuffer = await sharpInstance
           .tiff({ 
             compression: 'lzw',
             quality: 100
           })
-          .toFile(outputPath);
+          .toBuffer();
         break;
         
       default:
         // 기본값은 JPEG
-        await sharpInstance
+        processedBuffer = await sharpInstance
           .jpeg({ quality: parsedQuality })
-          .toFile(outputPath);
+          .toBuffer();
     }
     
     // MIME 타입 결정
@@ -291,22 +292,12 @@ app.post('/api/process', upload.single('image'), async (req, res) => {
       default: mimeType = 'image/jpeg';
     }
     
-    // 파일을 읽어서 직접 응답으로 전송
-    const processedImageBuffer = fs.readFileSync(outputPath);
-    
     // 응답 헤더 설정
     res.setHeader('Content-Disposition', `attachment; filename="${outputFilename}"`);
     res.setHeader('Content-Type', mimeType);
     
     // 파일 전송
-    res.send(processedImageBuffer);
-    
-    // 임시 파일 삭제 (비동기적으로)
-    setTimeout(() => {
-      fs.unlink(outputPath, (unlinkErr) => {
-        if (unlinkErr) console.error('파일 삭제 오류:', unlinkErr);
-      });
-    }, 1000);
+    res.send(processedBuffer);
     
   } catch (error) {
     console.error('이미지 처리 오류:', error);

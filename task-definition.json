@@ -39,22 +39,7 @@
           "name": "PORT",
           "value": "3000"
         }
-      ],
-      "mountPoints": [
-        {
-          "sourceVolume": "uploads",
-          "containerPath": "/app/uploads",
-          "readOnly": false
-        }
       ]
-    }
-  ],
-  "volumes": [
-    {
-      "name": "uploads",
-      "host": {
-        "sourcePath": "/tmp/uploads"
-      }
     }
   ]
 } 
