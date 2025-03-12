@@ -9,18 +9,22 @@ RUN apk add --no-cache \
     g++ \
     make
 
-# pnpm 설치
-RUN corepack enable && corepack prepare pnpm@latest --activate
+# pnpm 설치 및 환경 설정
+RUN corepack enable && corepack prepare pnpm@10.6.2 --activate
+ENV PNPM_HOME=/root/.local/share/pnpm
+ENV PATH=$PNPM_HOME:$PATH
+RUN mkdir -p $PNPM_HOME
 
 # 작업 디렉토리 생성
 WORKDIR /app
 
 # 패키지 파일 복사 및 의존성 설치
 COPY package.json pnpm-lock.yaml* ./
+RUN pnpm config set node-linker hoisted
 RUN pnpm install
 
-# PM2 전역 설치
-RUN pnpm add -g pm2
+# PM2 전역 설치 (npm 사용)
+RUN npm install -g pm2
 
 # 소스 코드 복사
 COPY . .
