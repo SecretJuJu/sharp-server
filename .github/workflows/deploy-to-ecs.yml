@@ -388,7 +388,7 @@ jobs:
             
             # 서비스가 삭제될 때까지 대기
             echo "Waiting for service to be deleted..."
-            sleep 60
+            sleep 80
           elif [ "$SERVICE_STATUS" == "DRAINING" ]; then
             echo "Service is in DRAINING state. Waiting for it to complete..."
             
