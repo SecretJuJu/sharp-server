@@ -10,11 +10,15 @@ const PORT = process.env.PORT || 3000;
 
 // 임시 업로드 저장소 설정
 const storage = multer.memoryStorage();
-const upload = multer({ storage });
+const upload = multer({ 
+  storage,
+  limits: { fileSize: 200 * 1024 * 1024 } // 200MB 제한
+});
 
 // 정적 파일 제공 및 CORS 설정
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '200mb' }));
+app.use(express.urlencoded({ limit: '200mb', extended: true }));
 app.use(express.static(path.join(__dirname, '../public')));
 
 // 헬스 체크 엔드포인트 추가
@@ -51,7 +55,7 @@ app.post('/api/preview', upload.single('image'), async (req, res) => {
     // 프리뷰 생성 최적화 옵션
     const sharpOptions = {
       failOnError: false, // 오류가 있어도 계속 진행
-      limitInputPixels: 50000000, // 입력 픽셀 제한 (메모리 사용량 제한)
+      limitInputPixels: 268435456, // 입력 픽셀 제한 증가 (16384 x 16384)
     };
     
     // Sharp 인스턴스 생성 및 리사이징
@@ -208,8 +212,10 @@ app.post('/api/process', upload.single('image'), async (req, res) => {
     
     // 메모리에서 처리하고 직접 응답으로 전송
     // Sharp 인스턴스 생성 및 리사이징
-    let sharpInstance = sharp(req.file.buffer)
-      .resize(parseInt(width), parseInt(height));
+    let sharpInstance = sharp(req.file.buffer, {
+      failOnError: false,
+      limitInputPixels: 268435456 // 입력 픽셀 제한 증가 (16384 x 16384)
+    }).resize(parseInt(width), parseInt(height));
     
     // 선택된 형식에 따라 출력 형식 설정
     const parsedQuality = parseInt(quality);
