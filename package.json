@@ -1,7 +1,7 @@
 {
   "name": "sharp-server",
   "version": "1.0.0",
-  "description": "이미지 변환 서비스",
+  "description": "image converter server",
   "main": "server/server.js",
   "scripts": {
     "start": "node server/server.js",
