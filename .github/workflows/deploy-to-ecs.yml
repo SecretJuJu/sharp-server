@@ -261,12 +261,12 @@ jobs:
             TARGET_GROUP_ARN=$(aws elbv2 create-target-group \
               --name ${TARGET_GROUP_NAME} \
               --protocol TCP \
-              --port 3000 \
+              --port 80 \
               --vpc-id ${VPC_ID} \
               --target-type ip \
               --health-check-protocol HTTP \
               --health-check-path /health \
-              --health-check-port 3000 \
+              --health-check-port 80 \
               --health-check-interval-seconds 30 \
               --health-check-timeout-seconds 10 \
               --healthy-threshold-count 3 \
@@ -289,7 +289,7 @@ jobs:
               --target-group-arn ${TARGET_GROUP_ARN} \
               --health-check-protocol HTTP \
               --health-check-path /health \
-              --health-check-port 3000 \
+              --health-check-port 80 \
               --health-check-interval-seconds 30 \
               --health-check-timeout-seconds 10 \
               --healthy-threshold-count 3 \
@@ -471,7 +471,7 @@ jobs:
             --desired-count 1 \
             --launch-type FARGATE \
             --network-configuration "awsvpcConfiguration={subnets=[${SUBNET_IDS}],securityGroups=[${SECURITY_GROUP_ID}],assignPublicIp=ENABLED}" \
-            --load-balancers "targetGroupArn=${TARGET_GROUP_ARN},containerName=${CONTAINER_NAME},containerPort=3000" \
+            --load-balancers "targetGroupArn=${TARGET_GROUP_ARN},containerName=${CONTAINER_NAME},containerPort=80" \
             --scheduling-strategy REPLICA
           
           # 서비스 안정화 대기
