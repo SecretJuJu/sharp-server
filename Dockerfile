@@ -22,16 +22,7 @@ WORKDIR /app
 # 패키지 파일 복사
 COPY package.json pnpm-lock.yaml* ./
 
-# Sharp 모듈을 위한 환경 변수 설정
-ENV SHARP_IGNORE_GLOBAL_LIBVIPS=1
-ENV npm_config_platform=linuxmusl
-ENV npm_config_arch=x64
-ENV SHARP_DIST_BASE_URL=https://sharp.pixelplumbing.com/vendor/v0.32.6/
-
-# 의존성 설치 (Sharp 모듈을 위한 특별 설정 포함)
-RUN pnpm config set node-linker hoisted
-RUN pnpm install --ignore-scripts=false
-RUN pnpm rebuild sharp
+RUN pnpm install --no-frozen-lockfile
 
 # PM2 전역 설치 (npm 사용)
 RUN npm install -g pm2
