@@ -23,7 +23,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
 
     steps:
       - name: Checkout
@@ -166,13 +165,18 @@ jobs:
 
       - name: Build, tag, and push image to Amazon ECR
         id: build-image
-        uses: docker/build-push-action@v4
-        with:
-          context: .
-          file: ./Dockerfile.debian
-          push: true
-          platforms: linux/amd64
-          tags: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+          HTTP_SSL_CERT: ${{ secrets.HTTP_SSL_CERT }}
+          HTTP_SSL_KEY: ${{ secrets.HTTP_SSL_KEY }}
+        run: |
+          # Build Docker image
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            --build-arg HTTP_SSL_CERT="$HTTP_SSL_CERT" \
+            --build-arg HTTP_SSL_KEY="$HTTP_SSL_KEY" .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
       - name: Update task definition
         run: |

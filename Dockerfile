@@ -1,5 +1,13 @@
 FROM node:18-alpine
 
+# 빌드 인자 정의
+ARG HTTP_SSL_CERT
+ARG HTTP_SSL_KEY
+
+# 환경 변수로 설정
+ENV HTTP_SSL_CERT=$HTTP_SSL_CERT
+ENV HTTP_SSL_KEY=$HTTP_SSL_KEY
+
 # 필요한 시스템 라이브러리 설치
 RUN apk add --no-cache \
     vips-dev \
@@ -35,14 +43,11 @@ RUN pnpm install --no-frozen-lockfile
 # Sharp 모듈 재빌드 (Alpine Linux 환경에 맞게)
 RUN cd /app/node_modules/sharp && npm rebuild --platform=linuxmusl --arch=x64
 
-# PM2 전역 설치 (npm 사용)
-RUN npm install -g pm2
-
-# Nginx 설정 파일 복사
-COPY nginx.conf /etc/nginx/nginx.conf
-
 # SSL 인증서 디렉토리 생성
 RUN mkdir -p /etc/nginx/ssl
+
+# Nginx 설정 복사
+COPY nginx.conf /etc/nginx/nginx.conf
 
 # 소스 코드 복사
 COPY . .
@@ -59,7 +64,7 @@ RUN echo '#!/bin/sh' > /start.sh && \
     echo 'echo "$HTTP_SSL_KEY" > /etc/nginx/ssl/key.pem' >> /start.sh && \
     echo 'chmod 600 /etc/nginx/ssl/cert.pem /etc/nginx/ssl/key.pem' >> /start.sh && \
     echo 'nginx' >> /start.sh && \
-    echo 'pm2-runtime start ecosystem.config.js' >> /start.sh && \
+    echo 'node server/server.js' >> /start.sh && \
     chmod +x /start.sh
 
 # 시작 스크립트 실행

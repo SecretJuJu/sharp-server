@@ -44,16 +44,6 @@
           "name": "PORT",
           "value": "3000"
         }
-      ],
-      "secrets": [
-        {
-          "name": "HTTP_SSL_CERT",
-          "valueFrom": "${HTTP_SSL_CERT_ARN}"
-        },
-        {
-          "name": "HTTP_SSL_KEY",
-          "valueFrom": "${HTTP_SSL_KEY_ARN}"
-        }
       ]
     }
   ]
