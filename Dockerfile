@@ -24,13 +24,12 @@ COPY package.json pnpm-lock.yaml* ./
 
 # Sharp 모듈을 위한 환경 변수 설정
 ENV SHARP_IGNORE_GLOBAL_LIBVIPS=1
-ENV npm_config_arch=x64
 ENV npm_config_platform=linuxmusl
 
 # 의존성 설치 (Sharp 모듈을 위한 특별 설정 포함)
 RUN pnpm config set node-linker hoisted
 RUN pnpm install --ignore-scripts=false
-RUN pnpm rebuild sharp --platform=linuxmusl --arch=x64
+RUN pnpm rebuild sharp
 
 # PM2 전역 설치 (npm 사용)
 RUN npm install -g pm2
