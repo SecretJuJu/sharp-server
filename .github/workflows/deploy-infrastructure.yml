@@ -95,6 +95,7 @@ jobs:
           TASK_ROLE=$(echo $OUTPUTS | jq -r '.[] | select(.OutputKey=="TaskRole") | .OutputValue')
           API_GATEWAY_URL=$(echo $OUTPUTS | jq -r '.[] | select(.OutputKey=="ApiGatewayURL") | .OutputValue')
           API_GATEWAY_ID=$(echo $OUTPUTS | jq -r '.[] | select(.OutputKey=="ApiGatewayId") | .OutputValue')
+          LOAD_BALANCER_DNS=$(echo $OUTPUTS | jq -r '.[] | select(.OutputKey=="LoadBalancerDNS") | .OutputValue')
           
           echo "ecs_cluster=$ECS_CLUSTER" >> $GITHUB_OUTPUT
           echo "ecs_service=$ECS_SERVICE" >> $GITHUB_OUTPUT
@@ -103,6 +104,7 @@ jobs:
           echo "task_role=$TASK_ROLE" >> $GITHUB_OUTPUT
           echo "api_gateway_url=$API_GATEWAY_URL" >> $GITHUB_OUTPUT
           echo "api_gateway_id=$API_GATEWAY_ID" >> $GITHUB_OUTPUT
+          echo "load_balancer_dns=$LOAD_BALANCER_DNS" >> $GITHUB_OUTPUT
 
       - name: Update task-definition.json
         run: |
@@ -132,16 +134,21 @@ jobs:
           echo "- ECS Service: ${{ steps.cfn-outputs.outputs.ecs_service }}" >> $GITHUB_STEP_SUMMARY
           echo "- EFS File System: ${{ steps.cfn-outputs.outputs.efs_id }}" >> $GITHUB_STEP_SUMMARY
           echo "- API Gateway URL: ${{ steps.cfn-outputs.outputs.api_gateway_url }}" >> $GITHUB_STEP_SUMMARY
+          echo "- NLB DNS Name: ${{ steps.cfn-outputs.outputs.load_balancer_dns }}" >> $GITHUB_STEP_SUMMARY
           
           if [ -n "${{ github.event.inputs.certificate_arn }}" ]; then
-            echo "- Custom Domain: sharp.secretjuju.kr (requires Cloudflare DNS setup)" >> $GITHUB_STEP_SUMMARY
+            echo "- Custom Domain: sharp.secretjuju.kr (requires DNS setup)" >> $GITHUB_STEP_SUMMARY
+            echo "- API Gateway Custom Domain: sharp.secretjuju.kr" >> $GITHUB_STEP_SUMMARY
           fi
           
           echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Architecture:" >> $GITHUB_STEP_SUMMARY
+          echo "API Gateway → VPC Link → NLB → ECS" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Next Steps:" >> $GITHUB_STEP_SUMMARY
           echo "1. Run the 'Deploy to Amazon ECS' workflow to deploy your application" >> $GITHUB_STEP_SUMMARY
-          echo "2. Access your application at the API Gateway URL" >> $GITHUB_STEP_SUMMARY
+          echo "2. Access your application via the API Gateway URL" >> $GITHUB_STEP_SUMMARY
           
           if [ -n "${{ github.event.inputs.certificate_arn }}" ]; then
-            echo "3. Set up Cloudflare DNS CNAME record for sharp.secretjuju.kr" >> $GITHUB_STEP_SUMMARY
+            echo "3. Set up DNS CNAME record for sharp.secretjuju.kr pointing to the API Gateway domain" >> $GITHUB_STEP_SUMMARY
           fi 

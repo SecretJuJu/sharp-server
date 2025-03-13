@@ -19,6 +19,39 @@
 - **CI/CD**: GitHub Actions
 - **패키지 관리**: pnpm
 
+## 아키텍처 구성
+
+이 서비스는 다음과 같은 아키텍처로 구성되어 있습니다:
+
+```
+API Gateway → VPC Link → NLB → ECS (Fargate/EC2 Spot)
+```
+
+### 구성 요소 설명
+
+1. **API Gateway**: 
+   - HTTPS 엔드포인트 제공
+   - 사용자 정의 도메인 및 SSL/TLS 인증서 지원
+   - CORS 설정 및 요청/응답 변환
+
+2. **VPC Link**: 
+   - API Gateway와 VPC 내부 리소스 연결
+   - 프라이빗 네트워크 통신 지원
+
+3. **Network Load Balancer (NLB)**: 
+   - TCP 레벨 로드 밸런싱
+   - 고성능 및 낮은 지연 시간
+   - ECS 서비스로 트래픽 분산
+
+4. **ECS (Elastic Container Service)**:
+   - Fargate: 서버리스 컨테이너 실행
+   - EC2 Spot: 비용 효율적인 컨테이너 실행
+   - 자동 확장 및 장애 복구
+
+5. **EFS (Elastic File System)**:
+   - 영구 스토리지 제공
+   - 컨테이너 간 파일 공유
+
 ## 배포 방법
 
 ### 사전 요구 사항
@@ -26,16 +59,9 @@
 - AWS 계정
 - GitHub 계정
 - AWS VPC 및 서브넷 ID
-- (선택 사항) Cloudflare에 등록된 도메인
+- ACM 인증서 (API Gateway 사용자 정의 도메인용)
 
-### GitHub Secrets 설정
-
-GitHub 저장소에 다음 시크릿을 설정합니다:
-
-- `AWS_ACCESS_KEY_ID`: AWS 액세스 키 ID
-- `AWS_SECRET_ACCESS_KEY`: AWS 시크릿 액세스 키
-
-### IAM 권한 설정
+### IAM 권한 요구사항
 
 배포에 사용되는 IAM 사용자에게는 다음과 같은 권한이 필요합니다:
 
@@ -103,7 +129,11 @@ GitHub 저장소에 다음 시크릿을 설정합니다:
       "Action": [
         "iam:CreateServiceLinkedRole"
       ],
-      "Resource": "arn:aws:iam::*:role/aws-service-role/elasticloadbalancing.amazonaws.com/AWSServiceRoleForElasticLoadBalancing"
+      "Resource": [
+        "arn:aws:iam::*:role/aws-service-role/elasticloadbalancing.amazonaws.com/AWSServiceRoleForElasticLoadBalancing",
+        "arn:aws:iam::*:role/aws-service-role/ecs.amazonaws.com/AWSServiceRoleForECS",
+        "arn:aws:iam::*:role/aws-service-role/apigateway.amazonaws.com/AWSServiceRoleForAPIGateway"
+      ]
     },
     {
       "Effect": "Allow",
@@ -246,7 +276,9 @@ GitHub 저장소에 다음 시크릿을 설정합니다:
         "apigateway:POST",
         "apigateway:PUT",
         "apigateway:DELETE",
-        "apigateway:PATCH"
+        "apigateway:PATCH",
+        "apigateway:TagResource",
+        "apigateway:UntagResource"
       ],
       "Resource": "*"
     },
@@ -255,7 +287,9 @@ GitHub 저장소에 다음 시크릿을 설정합니다:
       "Action": [
         "acm:ListCertificates",
         "acm:DescribeCertificate",
-        "acm:GetCertificate"
+        "acm:GetCertificate",
+        "acm:RequestCertificate",
+        "acm:AddTagsToCertificate"
       ],
       "Resource": "*"
     }
@@ -263,61 +297,21 @@ GitHub 저장소에 다음 시크릿을 설정합니다:
 }
 ```
 
-이 정책은 다음과 같은 AWS 서비스에 대한 권한을 포함합니다:
+### API Gateway와 VPC Link 관련 권한
 
-- **ECR**: 도커 이미지 저장소 관리
-- **ECS**: 컨테이너 서비스 및 태스크 관리
-- **IAM**: 역할 및 정책 관리
-- **CloudFormation**: 인프라 스택 관리
-- **EC2**: 인스턴스, 네트워크 인터페이스 및 보안 그룹 관리
-- **EFS**: 파일 시스템 관리
-- **CloudWatch Logs**: 로그 그룹 및 스트림 관리
-- **Auto Scaling**: 자동 확장 그룹 관리
-- **Application Auto Scaling**: 애플리케이션 자동 확장 관리
-- **SSM**: 시스템 관리자 파라미터 접근
-- **Elastic Load Balancing**: 로드 밸런서 관리 (ALB 및 NLB)
-- **API Gateway**: API 게이트웨이 관리
-- **ACM**: 인증서 관리
+API Gateway와 VPC Link를 설정하기 위해 다음과 같은 추가 권한이 필요합니다:
 
-### NLB(Network Load Balancer) 배포를 위한 권한
+1. **API Gateway 권한**:
+   - apigateway:GET, POST, PUT, DELETE, PATCH: API Gateway 리소스 관리
+   - apigateway:TagResource, UntagResource: API Gateway 리소스 태그 관리
 
-NLB를 생성하고 관리하기 위해서는 다음과 같은 IAM 권한이 필요합니다:
+2. **VPC Link 권한**:
+   - ec2:CreateNetworkInterface, DeleteNetworkInterface: VPC Link가 VPC 내부 리소스와 통신하기 위한 네트워크 인터페이스 관리
+   - ec2:DescribeNetworkInterfaces: 네트워크 인터페이스 정보 조회
+   - ec2:ModifyNetworkInterfaceAttribute: 네트워크 인터페이스 속성 수정
 
-1. **Elastic Load Balancing 권한**:
-   - elasticloadbalancing:CreateLoadBalancer
-   - elasticloadbalancing:CreateTargetGroup
-   - elasticloadbalancing:CreateListener
-   - elasticloadbalancing:DescribeLoadBalancers
-   - elasticloadbalancing:DescribeTargetGroups
-   - elasticloadbalancing:DescribeListeners
-   - elasticloadbalancing:RegisterTargets
-   - elasticloadbalancing:SetSubnets
-   - elasticloadbalancing:ModifyTargetGroupAttributes
-   - elasticloadbalancing:ModifyTargetGroup
-   - elasticloadbalancing:SetSecurityGroups
-   - elasticloadbalancing:AddTags
-   - elasticloadbalancing:RemoveTags
-   - elasticloadbalancing:ModifyListenerAttributes
-
-> **중요**: `elasticloadbalancing:ModifyTargetGroup` 권한이 반드시 필요합니다. 이 권한이 없으면 대상 그룹의 헬스 체크 설정을 업데이트할 수 없으며, 배포 과정에서 오류가 발생합니다.
-
-2. **EC2 권한**:
-   - ec2:DescribeSubnets
-   - ec2:DescribeVpcs
-   - ec2:DescribeSecurityGroups
-   - ec2:CreateSecurityGroup
-   - ec2:AuthorizeSecurityGroupIngress
-   - ec2:DescribeNetworkInterfaces
-   - ec2:DescribeAccountAttributes (계정 속성 확인용)
-
-3. **IAM 권한**:
-   - iam:CreateServiceLinkedRole (Elastic Load Balancing 서비스 연결 역할 생성용)
-
-이러한 권한은 다음 관리형 정책을 통해 얻을 수 있습니다:
-- AmazonEC2FullAccess
-- ElasticLoadBalancingFullAccess
-- AmazonECS-FullAccess
-- IAMFullAccess (또는 최소한 iam:CreateServiceLinkedRole 권한이 포함된 정책)
+3. **서비스 연결 역할 권한**:
+   - iam:CreateServiceLinkedRole: API Gateway 서비스 연결 역할 생성
 
 ### 배포 단계
 
@@ -330,178 +324,62 @@ NLB를 생성하고 관리하기 위해서는 다음과 같은 IAM 권한이 필
      - Auto Scaling 그룹 최소 크기 (기본값: 0)
      - Auto Scaling 그룹 최대 크기 (기본값: 2)
      - Auto Scaling 그룹 원하는 용량 (기본값: 0)
-     - (선택 사항) ACM 인증서 ARN: 사용자 정의 도메인을 사용하려면 입력
+     - ACM 인증서 ARN: API Gateway 사용자 정의 도메인을 위한 인증서 ARN
 
 2. **애플리케이션 배포**:
    - 인프라 배포가 완료되면 "Deploy to Amazon ECS" 워크플로우가 자동으로 실행됩니다.
    - 또는 코드 변경 후 main 브랜치에 푸시하면 자동으로 배포됩니다.
 
-3. **사용자 정의 도메인 설정 (선택 사항)**:
-   - **중요**: Cloudflare와 API Gateway 연결은 수동으로 설정해야 합니다.
-   - 아래 "Cloudflare와 API Gateway 연결" 섹션을 참조하세요.
+3. **사용자 정의 도메인 설정**:
+   - API Gateway 사용자 정의 도메인을 사용하려면 DNS 제공업체(예: Cloudflare)에서 CNAME 레코드를 추가해야 합니다.
+   - API Gateway 도메인 이름(예: d-abcdef123.execute-api.ap-northeast-2.amazonaws.com)을 대상으로 하는 CNAME 레코드를 생성합니다.
 
-## Cloudflare와 API Gateway 연결
+## API Gateway와 NLB 연결 구조 이해하기
 
-Cloudflare에 등록된 도메인(예: secretjuju.kr)을 API Gateway에 연결하려면 다음 단계를 수행해야 합니다:
+### 1. API Gateway HTTP API
 
-### 1. AWS Certificate Manager(ACM)에서 인증서 발급
+API Gateway HTTP API는 RESTful API를 생성하고 관리하는 서비스입니다. 이 프로젝트에서는 다음과 같은 기능을 제공합니다:
 
-1. AWS 콘솔에서 ACM으로 이동합니다.
-2. "인증서 요청"을 클릭합니다.
-3. 퍼블릭 인증서 요청을 선택합니다.
-4. 도메인 이름에 `sharp.secretjuju.kr`을 입력합니다.
-5. DNS 검증 방식을 선택합니다.
-6. 요청을 완료하고 검증을 위한 CNAME 레코드 정보를 확인합니다.
+- HTTPS 엔드포인트 제공
+- 사용자 정의 도메인 지원
+- CORS 설정
+- 요청 및 응답 변환
 
-### 2. Cloudflare에서 DNS 검증 레코드 추가
+### 2. VPC Link
 
-1. Cloudflare 대시보드에서 secretjuju.kr 도메인으로 이동합니다.
-2. DNS 섹션으로 이동합니다.
-3. ACM에서 제공한 CNAME 레코드를 추가합니다:
-   - 이름: ACM에서 제공한 이름 (예: `_x1.sharp.secretjuju.kr`)
-   - 대상: ACM에서 제공한 값
-   - 프록시 상태: 프록시 비활성화 (회색 구름)
+VPC Link는 API Gateway와 VPC 내부 리소스(이 경우 NLB) 간의 연결을 제공합니다:
 
-4. 인증서가 검증될 때까지 기다립니다 (보통 몇 분에서 몇 시간 소요).
+- API Gateway가 VPC 내부 리소스에 안전하게 액세스할 수 있도록 함
+- 프라이빗 네트워크 통신 지원
+- 보안 그룹 및 서브넷 설정 적용
 
-### 3. 인프라 배포 시 인증서 ARN 제공
+### 3. Network Load Balancer (NLB)
 
-1. 인증서가 검증되면 인증서의 ARN을 복사합니다.
-2. "Deploy AWS Infrastructure" 워크플로우를 실행할 때 인증서 ARN을 입력합니다.
+NLB는 TCP 레벨에서 트래픽을 로드 밸런싱합니다:
 
-### 4. API Gateway 사용자 정의 도메인 설정 확인
+- 고성능 및 낮은 지연 시간
+- TCP 프로토콜 지원 (SSL/TLS 종료 기능 없음)
+- ECS 서비스로 트래픽 분산
 
-1. 배포가 완료되면 AWS 콘솔에서 API Gateway로 이동합니다.
-2. "사용자 정의 도메인 이름"에서 `sharp.secretjuju.kr`이 추가되었는지 확인합니다.
-3. API Gateway에서 제공하는 대상 도메인 이름을 확인합니다 (예: `d-abcdef123.execute-api.ap-northeast-2.amazonaws.com`).
+### 4. ECS Service
 
-### 5. Cloudflare에서 API Gateway 연결 CNAME 추가
+ECS 서비스는 컨테이너화된 애플리케이션을 실행합니다:
 
-1. Cloudflare 대시보드에서 DNS 섹션으로 이동합니다.
-2. 다음과 같은 CNAME 레코드를 추가합니다:
-   - 이름: `sharp` (서브도메인)
-   - 대상: API Gateway에서 제공한 대상 도메인 이름
-   - 프록시 상태: 프록시 활성화 (주황색 구름)
+- Fargate: 서버리스 컨테이너 실행
+- EC2 Spot: 비용 효율적인 컨테이너 실행
+- 자동 확장 및 장애 복구
 
-3. SSL/TLS 섹션에서 "전체" 또는 "전체(엄격)" 모드를 선택합니다.
+### 트래픽 흐름
 
-### 6. 연결 확인
+1. 클라이언트가 API Gateway 엔드포인트로 HTTPS 요청을 보냅니다.
+2. API Gateway는 요청을 처리하고 VPC Link를 통해 NLB로 전달합니다.
+3. NLB는 요청을 ECS 서비스의 컨테이너로 라우팅합니다.
+4. ECS 서비스는 요청을 처리하고 응답을 반환합니다.
+5. 응답은 동일한 경로를 통해 클라이언트에게 전달됩니다.
 
-1. 브라우저에서 `https://sharp.secretjuju.kr`로 접속하여 서비스가 정상적으로 작동하는지 확인합니다.
-2. 문제가 있는 경우 Cloudflare의 SSL/TLS 설정과 DNS 설정을 확인합니다.
+## 주의 사항
 
-## Cloudflare와 NLB 연결
-
-Cloudflare에 등록된 도메인을 NLB(Network Load Balancer)에 연결하려면 다음 단계를 수행해야 합니다:
-
-### 1. NLB 배포 확인
-
-1. GitHub Actions 워크플로우가 성공적으로 완료되면 NLB가 생성됩니다.
-2. 워크플로우 로그에서 NLB DNS 이름을 확인합니다 (예: `sharp-server-nlb-123456789.ap-northeast-2.elb.amazonaws.com`).
-3. 또는 AWS 콘솔에서 EC2 > 로드 밸런서로 이동하여 `sharp-server-nlb`의 DNS 이름을 확인합니다.
-
-### 서비스 연결 역할(Service-Linked Role) 정보
-
-NLB를 처음 생성할 때 AWS는 자동으로 `AWSServiceRoleForElasticLoadBalancing`이라는 서비스 연결 역할을 생성합니다. 이 역할은 Elastic Load Balancing 서비스가 사용자를 대신하여 다른 AWS 서비스를 호출할 수 있도록 하는 권한을 제공합니다.
-
-이 역할을 생성하려면 IAM 사용자에게 `iam:CreateServiceLinkedRole` 권한이 필요합니다. 이 권한이 없으면 다음과 같은 오류가 발생할 수 있습니다:
-```bash
-An error occurred (AccessDenied) when calling the CreateLoadBalancer operation: User: arn:aws:iam::***:user/*** is not authorized to perform: iam:CreateServiceLinkedRole
-```
-
-또한 NLB 생성 시 AWS 계정의 속성을 확인하기 위해 `ec2:DescribeAccountAttributes` 권한도 필요합니다. 이 권한이 없으면 다음과 같은 오류가 발생할 수 있습니다:
-```bash
-An error occurred (AccessDenied) when calling the CreateLoadBalancer operation: User: arn:aws:iam::***:user/*** is not authorized to perform: ec2:DescribeAccountAttributes
-```
-
-이러한 오류가 발생하면 다음과 같이 해결할 수 있습니다:
-1. IAM 사용자에게 필요한 권한(`iam:CreateServiceLinkedRole`, `ec2:DescribeAccountAttributes`)을 추가합니다.
-2. AWS 콘솔에서 관리자 권한이 있는 사용자로 로그인하여 NLB를 한 번 생성합니다. 그러면 서비스 연결 역할이 자동으로 생성되며, 이후에는 이 권한이 없어도 NLB를 생성할 수 있습니다.
-
-### 2. Cloudflare에서 CNAME 레코드 추가
-
-1. Cloudflare 대시보드에서 도메인(예: secretjuju.kr)으로 이동합니다.
-2. DNS 섹션으로 이동합니다.
-3. 다음과 같은 CNAME 레코드를 추가합니다:
-   - 이름: `sharp` (또는 원하는 서브도메인)
-   - 대상: NLB DNS 이름 (예: `sharp-server-nlb-123456789.ap-northeast-2.elb.amazonaws.com`)
-   - 프록시 상태: 프록시 활성화 (주황색 구름)
-   - TTL: 자동
-
-### 3. Cloudflare SSL/TLS 설정
-
-1. Cloudflare 대시보드에서 SSL/TLS 섹션으로 이동합니다.
-2. 개요 탭에서 암호화 모드를 "전체" 또는 "전체(엄격)"로 설정합니다.
-3. 엣지 인증서 탭에서 항상 HTTPS 사용이 활성화되어 있는지 확인합니다.
-
-### 4. (선택 사항) 페이지 규칙 설정
-
-1. Cloudflare 대시보드에서 페이지 규칙 섹션으로 이동합니다.
-2. "페이지 규칙 생성" 버튼을 클릭합니다.
-3. URL 패턴에 `sharp.secretjuju.kr/*`를 입력합니다.
-4. "설정" 섹션에서 "항상 HTTPS 사용"을 선택합니다.
-5. "저장 및 배포" 버튼을 클릭합니다.
-
-### 5. 연결 확인
-
-1. 브라우저에서 `https://sharp.secretjuju.kr`로 접속하여 서비스가 정상적으로 작동하는지 확인합니다.
-2. 문제가 있는 경우 Cloudflare의 SSL/TLS 설정과 DNS 설정을 확인합니다.
-
-### 일반적인 배포 오류 및 해결 방법
-
-#### 1. Target Group ARN and Load Balancer Name cannot both be blank
-
-이 오류는 ECS 서비스를 생성할 때 대상 그룹 ARN이나 로드 밸런서 정보가 제대로 전달되지 않았을 때 발생합니다.
-
-**원인**:
-- 대상 그룹 ARN이 환경 변수에 제대로 저장되지 않았거나 전달되지 않았습니다.
-- 로드 밸런서 설정이 올바르게 구성되지 않았습니다.
-
-**해결 방법**:
-1. GitHub Actions 워크플로우 파일에서 대상 그룹 ARN을 환경 변수로 저장하는 부분을 확인합니다:
-   ```bash
-   echo "TARGET_GROUP_ARN=${TARGET_GROUP_ARN}" >> $GITHUB_ENV
-   ```
-2. ECS 서비스 생성 전에 대상 그룹 ARN이 비어있는지 확인하는 로직을 추가합니다:
-   ```bash
-   if [ -z "${TARGET_GROUP_ARN}" ]; then
-     echo "Error: Target Group ARN is empty. Cannot create service without target group."
-     exit 1
-   fi
-   ```
-3. 로드 밸런서 설정이 올바른지 확인합니다:
-   ```bash
-   --load-balancers "targetGroupArn=${TARGET_GROUP_ARN},containerName=${CONTAINER_NAME},containerPort=3000"
-   ```
-
-#### 2. elasticloadbalancing:ModifyTargetGroup 권한 오류
-
-이 오류는 대상 그룹의 헬스 체크 설정을 업데이트할 때 필요한 권한이 없을 때 발생합니다.
-
-**오류 메시지**:
-```bash
-An error occurred (AccessDenied) when calling the ModifyTargetGroup operation: User: arn:aws:iam::***:user/*** is not authorized to perform: elasticloadbalancing:ModifyTargetGroup on resource: arn:aws:elasticloadbalancing:***:targetgroup/***
-```
-
-**원인**:
-- IAM 사용자에게 `elasticloadbalancing:ModifyTargetGroup` 권한이 없습니다.
-
-**해결 방법**:
-1. IAM 사용자에게 `elasticloadbalancing:ModifyTargetGroup` 권한을 추가합니다.
-2. 또는 워크플로우 파일에서 대상 그룹 수정 부분에 조건문을 추가하여 권한이 없을 경우 오류를 무시하고 계속 진행하도록 수정합니다:
-   ```bash
-   if aws elbv2 modify-target-group \
-     --target-group-arn ${TARGET_GROUP_ARN} \
-     --health-check-protocol HTTP \
-     --health-check-path /health \
-     --health-check-port 3000 \
-     --health-check-interval-seconds 30 \
-     --health-check-timeout-seconds 10 \
-     --healthy-threshold-count 3 \
-     --unhealthy-threshold-count 3; then
-     echo "Successfully updated health check settings for target group"
-   else
-     echo "Warning: Failed to update target group settings. This may be due to insufficient permissions."
-     echo "Continuing with deployment using existing target group settings."
-   fi
-   ```
+1. **NLB SSL/TLS 제한**: NLB는 SSL/TLS 종료를 지원하지 않습니다. SSL/TLS 종료는 API Gateway에서 처리됩니다.
+2. **API Gateway 제한 시간**: API Gateway의 기본 제한 시간은 30초입니다. 오래 실행되는 작업의 경우 이 제한 시간을 고려해야 합니다.
+3. **VPC Link 비용**: VPC Link 사용에는 추가 비용이 발생합니다. 자세한 내용은 AWS 요금 페이지를 참조하세요.
+4. **API Gateway 스테이지**: 기본적으로 `$default` 스테이지가 사용됩니다. 이는 URL에 스테이지 이름이 포함되지 않음을 의미합니다.

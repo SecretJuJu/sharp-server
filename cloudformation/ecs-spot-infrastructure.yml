@@ -38,7 +38,7 @@ Parameters:
   CertificateArn:
     Type: String
     Description: ARN of the ACM certificate for the custom domain
-    Default: ''
+    Default: 'arn:aws:acm:ap-northeast-2:205070775242:certificate/d578bd0d-be8c-4eb4-8a4a-61d64d17f74b'
 
 Resources:
   # ECS Cluster
@@ -370,10 +370,19 @@ Resources:
         AllowMethods:
           - GET
           - POST
+          - PUT
+          - DELETE
           - OPTIONS
         AllowHeaders:
           - Content-Type
           - Authorization
+          - X-Amz-Date
+          - X-Api-Key
+          - X-Amz-Security-Token
+        ExposeHeaders:
+          - Content-Length
+          - Content-Type
+        MaxAge: 3600
 
   # VPC Link for API Gateway
   VpcLink:
@@ -383,6 +392,8 @@ Resources:
       SubnetIds: !Ref SubnetIds
       SecurityGroupIds:
         - !Ref ECSSecurityGroup
+      Tags:
+        Name: SharpServerVpcLink
 
   # API Gateway Integration
   ApiIntegration:
@@ -395,6 +406,7 @@ Resources:
       ConnectionType: VPC_LINK
       ConnectionId: !Ref VpcLink
       PayloadFormatVersion: '1.0'
+      TimeoutInMillis: 30000
 
   # API Gateway Route
   ApiRoute:
