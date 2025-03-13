@@ -1,14 +1,11 @@
-FROM node:18-alpine
+FROM node:18-slim
 
 # 필요한 시스템 라이브러리 설치
-RUN apk add --no-cache \
-    vips-dev \
-    fftw-dev \
-    build-base \
+RUN apt-get update && apt-get install -y \
+    build-essential \
     python3 \
-    g++ \
-    make \
-    libc6-compat
+    libvips-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 # pnpm 설치 및 환경 설정
 RUN corepack enable && corepack prepare pnpm@10.6.2 --activate
@@ -22,17 +19,8 @@ WORKDIR /app
 # 패키지 파일 복사
 COPY package.json pnpm-lock.yaml* ./
 
-# Sharp 모듈을 Alpine Linux(linuxmusl-x64)에 맞게 설치
-ENV SHARP_IGNORE_GLOBAL_LIBVIPS=1
-ENV npm_config_platform=linuxmusl
-ENV npm_config_arch=x64
-ENV npm_config_libc=musl
-
 # 의존성 설치
 RUN pnpm install --no-frozen-lockfile
-
-# Sharp 모듈 재빌드 (Alpine Linux 환경에 맞게)
-RUN cd /app/node_modules/sharp && npm rebuild --platform=linuxmusl --arch=x64
 
 # PM2 전역 설치 (npm 사용)
 RUN npm install -g pm2
