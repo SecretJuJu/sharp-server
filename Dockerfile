@@ -8,7 +8,8 @@ RUN apk add --no-cache \
     python3 \
     g++ \
     make \
-    libc6-compat
+    libc6-compat \
+    nginx
 
 # pnpm 설치 및 환경 설정
 RUN corepack enable && corepack prepare pnpm@10.6.2 --activate
@@ -37,14 +38,29 @@ RUN cd /app/node_modules/sharp && npm rebuild --platform=linuxmusl --arch=x64
 # PM2 전역 설치 (npm 사용)
 RUN npm install -g pm2
 
+# Nginx 설정 파일 복사
+COPY nginx.conf /etc/nginx/nginx.conf
+
+# SSL 인증서 디렉토리 생성
+RUN mkdir -p /etc/nginx/ssl
+
 # 소스 코드 복사
 COPY . .
 
 # 업로드 디렉토리 생성 및 권한 설정
 RUN mkdir -p /app/uploads && chmod 777 /app/uploads
 
-# 포트 노출
-EXPOSE 3000
+# 포트 노출 (HTTP 및 HTTPS)
+EXPOSE 80 443
 
-# PM2로 애플리케이션 실행
-CMD ["pm2-runtime", "start", "ecosystem.config.js"] 
+# 시작 스크립트 생성
+RUN echo '#!/bin/sh' > /start.sh && \
+    echo 'echo "$HTTP_SSL_CERT" > /etc/nginx/ssl/cert.pem' >> /start.sh && \
+    echo 'echo "$HTTP_SSL_KEY" > /etc/nginx/ssl/key.pem' >> /start.sh && \
+    echo 'chmod 600 /etc/nginx/ssl/cert.pem /etc/nginx/ssl/key.pem' >> /start.sh && \
+    echo 'nginx' >> /start.sh && \
+    echo 'pm2-runtime start ecosystem.config.js' >> /start.sh && \
+    chmod +x /start.sh
+
+# 시작 스크립트 실행
+CMD ["/start.sh"] 

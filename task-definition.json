@@ -17,8 +17,13 @@
       "essential": true,
       "portMappings": [
         {
-          "containerPort": 3000,
-          "hostPort": 3000,
+          "containerPort": 80,
+          "hostPort": 80,
+          "protocol": "tcp"
+        },
+        {
+          "containerPort": 443,
+          "hostPort": 443,
           "protocol": "tcp"
         }
       ],
@@ -38,6 +43,16 @@
         {
           "name": "PORT",
           "value": "3000"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "HTTP_SSL_CERT",
+          "valueFrom": "${HTTP_SSL_CERT_ARN}"
+        },
+        {
+          "name": "HTTP_SSL_KEY",
+          "valueFrom": "${HTTP_SSL_KEY_ARN}"
         }
       ]
     }
